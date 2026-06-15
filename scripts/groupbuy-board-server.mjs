@@ -668,6 +668,12 @@ function formatDateTime(value) {
   return String(value);
 }
 
+function groupbuyApiDateTime(dateKey, endOfDay = false) {
+  const normalized = formatDateKey(dateKey);
+  if (!normalized) return "";
+  return `${normalized} ${endOfDay ? "23:59:59" : "00:00:00"}`;
+}
+
 function parseJson(text, message) {
   try {
     return JSON.parse(text);
@@ -721,6 +727,9 @@ async function verifySalonAccount(account, password) {
   }
   return {
     account,
+    token,
+    accessToken: token,
+    sessionToken,
     salonId: loginValue(login, ["salon_id", "salonId"]),
     brandId: loginValue(login, ["brand_id", "brandId"])
   };
@@ -749,12 +758,12 @@ function withPage(urlText, page, pageSize, login) {
   if ((env.GROUPBUY_DATA_LOGIN || "salon") === "salon") {
     const token =
       env.GROUPBUY_TOKEN ||
-      searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
-      loginValue(login, ["token"]);
+      loginValue(login, ["token", "access_token"]) ||
+      searchParamFromUrl(env.BINDING_DATA_URL || "", "token");
     const sessionToken =
       env.GROUPBUY_SESSION_TOKEN ||
-      searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
       loginValue(login, ["session_token", "sessionToken"]) ||
+      searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
       "";
     if (!sessionToken) {
       throw new Error("拼团接口缺少 GROUPBUY_SESSION_TOKEN。门店账号沿用绑定推送配置，只需从浏览器 Network 复制最新拼团接口 curl 后补这个 session_token。");
@@ -773,6 +782,11 @@ function withOrderStatus(urlText, orderStatus) {
 
 function withGroupbuyFilters(urlText, filters) {
   const url = new URL(urlText);
+  const beginDate = groupbuyApiDateTime(filters.beginDate, false);
+  const endDate = groupbuyApiDateTime(filters.endDate, true);
+  if (beginDate) url.searchParams.set("begin_date", beginDate);
+  if (endDate) url.searchParams.set("end_date", endDate);
+  if (filters.keyword) url.searchParams.set("query", filters.keyword);
   return url.toString();
 }
 
@@ -804,12 +818,18 @@ function getTotal(payload) {
   return undefined;
 }
 
-async function fetchPayload(filters = dateRangeFromSearch()) {
+async function fetchPayload(filters = dateRangeFromSearch(), session = {}) {
   if (env.GROUPBUY_DATA_FILE) {
     return JSON.parse(await readFile(path.resolve(projectRoot, env.GROUPBUY_DATA_FILE), "utf8"));
   }
 
-  const login = await loginBySalonCli();
+  const login = {
+    ...(await loginBySalonCli()),
+    token: session.token || session.accessToken,
+    access_token: session.accessToken || session.token,
+    session_token: session.sessionToken,
+    sessionToken: session.sessionToken
+  };
   const dataUrl = withGroupbuyFilters(env.GROUPBUY_DATA_URL || defaultDataUrl, filters);
   const headers = {
     accept: "application/json, text/plain, */*",
@@ -1251,6 +1271,9 @@ async function handleRequest(req, res) {
       const id = randomBytes(24).toString("hex");
       sessions.set(id, {
         account: user.account,
+        token: user.token,
+        accessToken: user.accessToken,
+        sessionToken: user.sessionToken,
         salonId: user.salonId,
         brandId: user.brandId,
         createdAt: Date.now(),
@@ -1287,7 +1310,7 @@ async function handleRequest(req, res) {
 
     if (url.pathname === "/api/groupbuy") {
       const filters = dateRangeFromSearch(url.searchParams);
-      const payload = await fetchPayload(filters);
+      const payload = await fetchPayload(filters, session);
       const board = buildBoard(payload, filters);
       await textResponse(res, 200, JSON.stringify(board), "application/json; charset=utf-8");
       return;
