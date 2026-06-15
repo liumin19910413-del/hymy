@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Hengyi Meiyuan binding data push every day
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=30s
+Unit=hengyi-binding-push.service
+
+[Install]
+WantedBy=timers.target

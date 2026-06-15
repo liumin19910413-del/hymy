@@ -15,6 +15,7 @@ const top10Only = args.has("--top10-only");
 await loadDotEnv(path.join(projectRoot, ".env"));
 
 const env = process.env;
+const requestTimeoutMs = Number(env.PUSH_UPSTREAM_TIMEOUT_MS || 25000);
 
 function timestamp() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
@@ -66,6 +67,18 @@ function parseNumber(value) {
   if (value == null || value === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function withTimeout(options = {}, timeoutMs = requestTimeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    options: {
+      ...options,
+      signal: controller.signal
+    },
+    done: () => clearTimeout(timeout)
+  };
 }
 
 function hasPhone(row, phoneFields) {
@@ -274,7 +287,7 @@ function withPage(urlText, page, pageSize) {
 
 async function fetchJson(url, headers) {
   const method = env.BINDING_DATA_METHOD || "GET";
-  const response = await fetch(url, {
+  const timeout = withTimeout({
     method,
     headers: {
       ...headers,
@@ -282,12 +295,20 @@ async function fetchJson(url, headers) {
     },
     body: env.BINDING_DATA_BODY || undefined
   });
-
-  if (!response.ok) {
-    throw new Error(`数据源请求失败：HTTP ${response.status}`);
+  try {
+    const response = await fetch(url, timeout.options);
+    if (!response.ok) {
+      throw new Error(`数据源请求失败：HTTP ${response.status}`);
+    }
+    return response.json();
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`数据源请求超时（${requestTimeoutMs}ms），请检查服务器出网或稍后重试。`);
+    }
+    throw error;
+  } finally {
+    timeout.done();
   }
-
-  return response.json();
 }
 
 async function fetchHttpPayload() {

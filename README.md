@@ -126,6 +126,8 @@ salon-login -> salon-syb-list -> salon-syb-send
 
 ## 4. 安装本地定时任务
 
+这一节只适用于 Mac 本机。如果部署到阿里云 ECS，请使用后面的「阿里云定时推送」。
+
 默认每天 09:00 执行：
 
 ```bash
@@ -300,9 +302,11 @@ sudo systemctl restart hengyi-groupbuy-board
 用户浏览器 -> Nginx 80/443 -> Node 127.0.0.1:8787
 ```
 
-项目内已提供两个模板：
+项目内已提供四个模板：
 
 - `deploy/hengyi-groupbuy-board.service`：systemd 服务，负责开机自启、异常重启、写日志
+- `deploy/hengyi-binding-push.service`：systemd 单次推送任务，负责执行每日绑定数据播报
+- `deploy/hengyi-binding-push.timer`：systemd 定时器，默认每天 20:00 触发推送
 - `deploy/nginx-hengyi-groupbuy-board.conf`：Nginx 反向代理配置
 
 服务器目录示例：
@@ -310,10 +314,28 @@ sudo systemctl restart hengyi-groupbuy-board
 ```bash
 sudo mkdir -p /opt/hengyi-meiyuan-data
 sudo cp -R . /opt/hengyi-meiyuan-data
+cd /opt/hengyi-meiyuan-data
+sudo cp .env.example .env
+sudo vim .env
+```
+
+`.env` 填好后安装看板服务和定时推送：
+
+```bash
+sudo bash scripts/install-systemd.sh
+```
+
+如果不用安装脚本，也可以手动执行：
+
+```bash
 sudo cp deploy/hengyi-groupbuy-board.service /etc/systemd/system/hengyi-groupbuy-board.service
+sudo cp deploy/hengyi-binding-push.service /etc/systemd/system/hengyi-binding-push.service
+sudo cp deploy/hengyi-binding-push.timer /etc/systemd/system/hengyi-binding-push.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now hengyi-groupbuy-board
+sudo systemctl enable --now hengyi-binding-push.timer
 sudo systemctl status hengyi-groupbuy-board
+sudo systemctl list-timers --all hengyi-binding-push.timer
 ```
 
 查看服务日志：
@@ -322,6 +344,57 @@ sudo systemctl status hengyi-groupbuy-board
 sudo journalctl -u hengyi-groupbuy-board -f
 sudo tail -f /var/log/hengyi-groupbuy-board.log
 sudo tail -f /var/log/hengyi-groupbuy-board.error.log
+```
+
+### 阿里云定时推送
+
+部署到阿里云后，绑定数据推送不再依赖你本机开机。只要 ECS 正常运行，`hengyi-binding-push.timer` 会每天触发 `hengyi-binding-push.service`。
+
+默认推送时间是服务器时间每天 20:00。建议先把服务器时区设为上海：
+
+```bash
+timedatectl
+sudo timedatectl set-timezone Asia/Shanghai
+```
+
+手动试跑一次正式推送：
+
+```bash
+sudo systemctl start hengyi-binding-push.service
+```
+
+只看最近一次推送结果：
+
+```bash
+sudo journalctl -u hengyi-binding-push.service -n 100 --no-pager
+sudo tail -n 100 /var/log/hengyi-binding-push.log
+sudo tail -n 100 /var/log/hengyi-binding-push.error.log
+```
+
+查看下一次什么时候推送：
+
+```bash
+sudo systemctl list-timers --all hengyi-binding-push.timer
+```
+
+修改推送时间：
+
+```bash
+sudo vim /etc/systemd/system/hengyi-binding-push.timer
+sudo systemctl daemon-reload
+sudo systemctl restart hengyi-binding-push.timer
+```
+
+如果只想推总览 + TOP10，把 `/etc/systemd/system/hengyi-binding-push.service` 里的 `ExecStart` 改成：
+
+```text
+ExecStart=/usr/bin/node /opt/hengyi-meiyuan-data/scripts/push-binding-stats.mjs --top10-only
+```
+
+然后执行：
+
+```bash
+sudo systemctl daemon-reload
 ```
 
 部署 Nginx 后检查：

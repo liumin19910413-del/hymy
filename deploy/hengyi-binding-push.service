@@ -1,0 +1,16 @@
+[Unit]
+Description=Hengyi Meiyuan daily binding data push
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hengyi-meiyuan-data
+EnvironmentFile=/opt/hengyi-meiyuan-data/.env
+Environment=NODE_ENV=production
+Environment=TZ=Asia/Shanghai
+Environment=NPM_CONFIG_CACHE=/opt/hengyi-meiyuan-data/.npm-cache
+ExecStart=/usr/bin/node /opt/hengyi-meiyuan-data/scripts/push-binding-stats.mjs
+TimeoutStartSec=120
+StandardOutput=append:/var/log/hengyi-binding-push.log
+StandardError=append:/var/log/hengyi-binding-push.error.log
