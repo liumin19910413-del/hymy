@@ -163,7 +163,7 @@ rm ~/Library/LaunchAgents/com.local.hengyi-meiyuan.binding-push.plist
 - 门店账号沿用前面绑定数据推送的同一套 `MG_SALON_ACCOUNT` / `MG_SALON_PASSWORD`
 - 拼团榜单不单独配置第二套门店账号
 - `GROUPBUY_DATA_URL` 中的 `salon_id` / `brand_id` 要和这个门店保持一致
-- 由于拼团接口额外需要 `session_token`，只需要从浏览器 Network 的拼团接口 curl 中补 `GROUPBUY_SESSION_TOKEN`
+- 拼团接口额外需要服务端维护 `GROUPBUY_SESSION_TOKEN`，普通用户页面不暴露凭证更新入口
 
 统计口径：
 
@@ -172,8 +172,8 @@ rm ~/Library/LaunchAgents/com.local.hengyi-meiyuan.binding-push.plist
 - 页面顶部可筛选开始日期 / 结束日期
 - 只统计系统有效订单：订单 `status=7` 或 `status=200`，且无退款
 - 交易关闭、退款完成、退款成功、已退款、退款关闭、未支付订单不统计
-- 未成团榜单按「还差单数」从少到多排序
-- SPU 汇总按拼团商品名聚合展示开团数、订单数、金额、已成团、未成团、成团率
+- 拼团汇总按拼团商品名聚合展示开团数、订单数、金额、已成团、未成团、成团率
+- 未成团列表支持按团长、手机号、标题搜索，超过 20 条时分页展示
 
 启动：
 
@@ -196,9 +196,10 @@ http://127.0.0.1:8787/groupbuy
 页面包含：
 
 - 本月默认汇总：有效订单、有效金额、开团数、已成团数、未成团数、成团率
-- SPU 汇总：默认按拼团商品名展示全部拼团订单
-- 未成团 TOP10：按还差单数排序，优先看到最容易成团的团长
-- 全部明细：支持按团长、手机号、标题搜索，并可筛选未成团 / 已成团
+- 拼团汇总：默认按拼团商品名展示全部拼团订单
+- 未成团：支持按团长、手机号、标题搜索，20 条一页分页展示
+- 已成团：展示当前筛选范围内已成团团长
+- 绑定数据：展示累计绑定、累计有手机号、累计无手机号、今日绑定、昨日绑定，以及所有合伙人 20 条一页分页列表
 
 可选配置：
 
@@ -209,7 +210,11 @@ GROUPBUY_DEFAULT_KEYWORD=
 GROUPBUY_DATA_URL=https://api-sy-z1.meimeifa.com/salon/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637
 GROUPBUY_PAGE_SIZE=100
 GROUPBUY_MAX_PAGE=100
-GROUPBUY_SESSION_TOKEN=从浏览器拼团接口 curl 中复制 session_token
+GROUPBUY_SESSION_TOKEN=管理员维护的拼团后台 session_token
+GROUPBUY_AUTO_REFRESH=true
+GROUPBUY_REFRESH_COMMAND=
+GROUPBUY_REFRESH_TIMEOUT_MS=30000
+GROUPBUY_ALLOW_BROWSER_SESSION_UPDATE=false
 GROUPBUY_ORDER_STATUS_VALUES=,100
 GROUPBUY_SUCCESS_ORDER_STATUS_VALUES=100
 GROUPBUY_EFFECTIVE_ORDER_STATUS_VALUES=7,200
@@ -244,7 +249,10 @@ GROUPBUY_AMOUNT_UNIT=cent
 ```bash
 MG_SALON_ACCOUNT=绑定推送同一套门店账号
 MG_SALON_PASSWORD=绑定推送同一套门店密码
-GROUPBUY_SESSION_TOKEN=从浏览器拼团接口 curl 中复制 session_token
+GROUPBUY_SESSION_TOKEN=管理员维护的拼团后台 session_token
+GROUPBUY_AUTO_REFRESH=true
+GROUPBUY_REFRESH_COMMAND=
+GROUPBUY_ALLOW_BROWSER_SESSION_UPDATE=false
 GROUPBUY_BOARD_HOST=0.0.0.0
 GROUPBUY_BOARD_PORT=8787
 ```
@@ -261,15 +269,17 @@ npm run groupbuy:board
 http://服务器IP或域名:8787/groupbuy
 ```
 
-如果 `session_token` 过期，页面会提示需要更新 `GROUPBUY_SESSION_TOKEN`。重新从浏览器 Network 复制最新拼团接口 curl 里的 `session_token`，更新服务器环境变量后重启服务即可。
+如果 `session_token` 过期，服务端会先自动重新登录并重试一次；如果刷新来源没有返回拼团接口认可的 `session_token`，普通用户页面才展示“拼团数据正在维护”，不会要求用户复制或粘贴任何后台请求。
 
 ### 稳定性策略
 
-为了避免客户使用时遇到“早上有数据，下午突然空白”，服务端做了几件保护：
+服务端实时请求上游接口，避免页面展示旧缓存数据：
 
 - 上游接口请求默认 25 秒超时，可用 `UPSTREAM_TIMEOUT_MS` 调整
-- 拼团和绑定接口最近一次成功结果会缓存在内存中
-- 如果上游接口临时失败或 `session_token` 过期，页面会展示最近一次成功缓存，并明确提示“当前为缓存数据”
+- 拼团和绑定接口每次刷新 / 查询都会重新请求上游接口
+- 如果拼团接口判断授权过期，服务端会自动执行刷新并重试一次
+- 默认刷新方式会复用门店账号调用拼团后台 `loginCenter` + `toggle`，自动生成新的服务端会话并重试；如果后续需要专门刷新来源，可用 `GROUPBUY_REFRESH_COMMAND` 接入自定义刷新命令
+- 如果自动刷新仍失败，用户页面会展示维护提示，避免把上次成功数据误认为当前最新数据
 - `/healthz` 可用于 Nginx、systemd 或人工巡检确认 Node 服务还活着
 - 接口业务错误会区分授权过期、上游错误、请求超时，不再只显示泛泛的 500
 
@@ -278,17 +288,35 @@ http://服务器IP或域名:8787/groupbuy
 ```bash
 BOARD_SESSION_TTL_HOURS=12
 UPSTREAM_TIMEOUT_MS=25000
-BOARD_STALE_CACHE_TTL_MINUTES=720
 GROUPBUY_BOARD_HOST=127.0.0.1
 GROUPBUY_BOARD_PORT=8787
+GROUPBUY_AUTO_REFRESH=true
 ```
 
-如果页面提示 `GROUPBUY_SESSION_TOKEN` 可能过期：
+自定义刷新命令示例：
 
-1. 用门店后台浏览器重新打开拼团订单接口
-2. 从 Network 的请求 URL 里复制最新 `session_token`
-3. 更新服务器 `/opt/hengyi-meiyuan-data/.env`
-4. 重启服务：
+```bash
+GROUPBUY_REFRESH_COMMAND='node scripts/refresh-groupbuy-session.mjs'
+```
+
+命令输出支持 JSON 或 URL，例如：
+
+```json
+{"token":"...", "session_token":"..."}
+```
+
+如果管理员需要临时从页面更新 `session_token`，必须先显式配置：
+
+```bash
+GROUPBUY_ALLOW_BROWSER_SESSION_UPDATE=true
+```
+
+生产环境默认保持 `false`，避免普通登录用户修改服务端拼团凭证。
+
+管理员处理 `GROUPBUY_SESSION_TOKEN` 过期：
+
+1. 在服务端更新 `/opt/hengyi-meiyuan-data/.env` 中的 `GROUPBUY_SESSION_TOKEN`
+2. 重启服务：
 
 ```bash
 sudo systemctl restart hengyi-groupbuy-board

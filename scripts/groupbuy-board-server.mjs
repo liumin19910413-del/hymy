@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -19,9 +19,7 @@ const host = env.GROUPBUY_BOARD_HOST || "127.0.0.1";
 const sessionCookieName = "hy_board_session";
 const sessionTtlMs = Number(env.BOARD_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
 const requestTimeoutMs = Number(env.UPSTREAM_TIMEOUT_MS || 25000);
-const staleCacheTtlMs = Number(env.BOARD_STALE_CACHE_TTL_MINUTES || 12 * 60) * 60 * 1000;
 const sessions = new Map();
-const boardCache = new Map();
 const defaultDataUrl =
   "https://api-sy-z1.meimeifa.com/salon/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
 
@@ -55,6 +53,105 @@ async function loadDotEnv(filePath) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
+}
+
+function extractQueryParam(input, name) {
+  const text = String(input || "").trim();
+  if (!text) return "";
+  try {
+    return new URL(text).searchParams.get(name) || "";
+  } catch {
+    const match = text.match(new RegExp(`(?:^|[?&\\s])${name}=([^&\\s]+)`));
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+}
+
+function cleanEnvValue(value) {
+  return String(value || "").replace(/\r?\n/g, "").trim();
+}
+
+async function updateDotEnv(updates) {
+  const filePath = path.join(projectRoot, ".env");
+  let text = "";
+  try {
+    text = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  const lines = text ? text.split(/\r?\n/) : [];
+  const seen = new Set();
+  const nextLines = lines.map((line) => {
+    const match = line.match(/^([A-Z0-9_]+)=/);
+    if (!match || !(match[1] in updates)) return line;
+    seen.add(match[1]);
+    return `${match[1]}=${updates[match[1]]}`;
+  });
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (!seen.has(key)) nextLines.push(`${key}=${value}`);
+  }
+
+  await writeFile(filePath, `${nextLines.join("\n").replace(/\n+$/, "")}\n`, "utf8");
+}
+
+async function saveGroupbuyCredentials(input) {
+  const { token, sessionToken } = parseGroupbuyCredentialInput(input);
+  if (!sessionToken || sessionToken.length < 8) {
+    throw new AppError("没有识别到有效的 session_token。", 400);
+  }
+
+  const updates = { GROUPBUY_SESSION_TOKEN: sessionToken };
+  if (token) updates.GROUPBUY_TOKEN = token;
+  Object.assign(process.env, updates);
+  await updateDotEnv(updates);
+  return {
+    hasToken: Boolean(token),
+    sessionTokenLength: sessionToken.length
+  };
+}
+
+function parseGroupbuyCredentialInput(input) {
+  let raw = input;
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (/^\{[\s\S]*\}$/.test(text)) {
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        raw = text;
+      }
+    }
+  }
+
+  if (raw && typeof raw === "object") {
+    const url = raw.url || raw.requestUrl || raw.href || "";
+    return {
+      token: cleanEnvValue(raw.token || raw.GROUPBUY_TOKEN || extractQueryParam(url, "token")),
+      sessionToken: cleanEnvValue(
+        raw.session_token ||
+          raw.sessionToken ||
+          raw.GROUPBUY_SESSION_TOKEN ||
+          extractQueryParam(url, "session_token")
+      )
+    };
+  }
+
+  const text = String(raw || "").trim();
+  return {
+    token: cleanEnvValue(extractQueryParam(text, "token")),
+    sessionToken: cleanEnvValue(extractQueryParam(text, "session_token") || text)
+  };
+}
+
+async function persistRefreshedGroupbuyCredentials(credentials) {
+  const updates = {};
+  if (credentials?.token) updates.GROUPBUY_TOKEN = cleanEnvValue(credentials.token);
+  if (credentials?.sessionToken) updates.GROUPBUY_SESSION_TOKEN = cleanEnvValue(credentials.sessionToken);
+  if (Object.keys(updates).length === 0) return false;
+  Object.assign(process.env, updates);
+  await updateDotEnv(updates);
+  return true;
 }
 
 function getByPath(input, dottedPath) {
@@ -124,30 +221,6 @@ function isAuthExpiredMessage(text) {
   return /session_token|token|登录|授权|过期|失效|invalid|unauthor/i.test(String(text || ""));
 }
 
-function cacheKey(name, input = {}) {
-  return `${name}:${JSON.stringify(input)}`;
-}
-
-function setCachedBoard(key, board) {
-  boardCache.set(key, {
-    board,
-    cachedAt: Date.now()
-  });
-}
-
-function cachedBoardOnFailure(key, error) {
-  const item = boardCache.get(key);
-  if (!item) return null;
-  if (Date.now() - item.cachedAt > staleCacheTtlMs) return null;
-  return {
-    ...item.board,
-    stale: true,
-    staleReason: error.message || String(error),
-    cachedAt: new Date(item.cachedAt).toISOString(),
-    cachedAtText: new Date(item.cachedAt).toLocaleString("zh-CN", { hour12: false })
-  };
-}
-
 function formatDateKey(value) {
   if (!value) return "";
   if (typeof value === "number" || /^\d{10,13}$/.test(String(value))) {
@@ -176,6 +249,12 @@ function formatDateKey(value) {
 
 function todayKey() {
   return formatDateKey(new Date());
+}
+
+function offsetDateKey(days) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return formatDateKey(date);
 }
 
 function monthStartKey(date = new Date()) {
@@ -757,6 +836,74 @@ async function loginBySalonCli() {
   return parseJson(stdout, "salon-login 返回不是 JSON。");
 }
 
+async function fetchLiteJson(pathname, body) {
+  const timeout = withTimeout({
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/plain, */*",
+      origin: "https://sy-z1.meimeifa.com",
+      referer: "https://sy-z1.meimeifa.com/"
+    },
+    body: JSON.stringify({
+      ...body,
+      _yz_version: env.GROUPBUY_YZ_VERSION || "lite:4.73.3"
+    })
+  });
+  let response;
+  let payload;
+  try {
+    response = await fetch(`https://api-sy-z1.meimeifa.com${pathname}`, timeout.options);
+    const text = await response.text();
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+  } finally {
+    timeout.done();
+  }
+  if (!response.ok || (payload?.code && Number(payload.code) !== 1)) {
+    const message = upstreamMessage(payload, `HTTP ${response.status}`);
+    throw new AppError(`拼团后台自动登录失败：${message}`, 502, { upstreamCode: payload?.code });
+  }
+  return payload;
+}
+
+async function loginByLiteBackend() {
+  if (!env.MG_SALON_ACCOUNT || !env.MG_SALON_PASSWORD) {
+    throw new Error("缺少 MG_SALON_ACCOUNT 或 MG_SALON_PASSWORD，无法自动登录拼团后台。");
+  }
+
+  const dataUrl = env.GROUPBUY_DATA_URL || defaultDataUrl;
+  const salonId = searchParamFromUrl(dataUrl, "salon_id") || env.GROUPBUY_SALON_ID || "";
+  const brandId = searchParamFromUrl(dataUrl, "brand_id") || env.GROUPBUY_BRAND_ID || "";
+  const login = await fetchLiteJson("/common/loginCenter", {
+    account: env.MG_SALON_ACCOUNT,
+    password: env.MG_SALON_PASSWORD
+  });
+  const loginToken = loginValue(login, ["response.token", "token"]);
+  if (!loginToken) throw new AppError("拼团后台自动登录未返回 token。", 502);
+
+  let token = loginToken;
+  if (salonId && brandId) {
+    const toggled = await fetchLiteJson("/common/toggle", {
+      token: loginToken,
+      salon_id: salonId,
+      brand_id: brandId,
+      dest_salon_id: salonId,
+      dest_brand_id: brandId
+    });
+    token = loginValue(toggled, ["response.token", "token"]) || loginToken;
+  }
+
+  return {
+    token,
+    sessionToken: randomUUID(),
+    source: "lite-login"
+  };
+}
+
 async function verifySalonAccount(account, password) {
   if (!account || !password) {
     throw new Error("请输入门店系统账号和密码。");
@@ -824,25 +971,40 @@ function searchParamFromUrl(urlText, name) {
   }
 }
 
-function withPage(urlText, page, pageSize, login) {
+function groupbuyCredentials(login = {}, session = {}, overrides = {}) {
+  const loginToken = loginValue(login, ["token", "access_token"]);
+  const loginSessionToken = loginValue(login, ["session_token", "sessionToken"]);
+  return {
+    token:
+      overrides.token ||
+      env.GROUPBUY_TOKEN ||
+      searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "token") ||
+      searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
+      session.token ||
+      session.accessToken ||
+      loginToken,
+    sessionToken:
+      overrides.sessionToken ||
+      env.GROUPBUY_SESSION_TOKEN ||
+      searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "session_token") ||
+      searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
+      session.sessionToken ||
+      loginSessionToken
+  };
+}
+
+function withPage(urlText, page, pageSize, login, session = {}, credentialOverrides = {}) {
   const url = new URL(urlText);
   url.searchParams.set(env.GROUPBUY_PAGE_PARAM || "page", String(page));
   url.searchParams.set(env.GROUPBUY_PAGE_SIZE_PARAM || "page_size", String(pageSize));
   if ((env.GROUPBUY_DATA_LOGIN || "salon") === "salon") {
-    const token =
-      env.GROUPBUY_TOKEN ||
-      searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "token") ||
-      searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
-      loginValue(login, ["token", "access_token"]);
-    const sessionToken =
-      env.GROUPBUY_SESSION_TOKEN ||
-      loginValue(login, ["session_token", "sessionToken"]) ||
-      searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "session_token") ||
-      searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
-      "";
-    if (!token) throw new AppError("拼团接口缺少 token，请配置 GROUPBUY_TOKEN 或 BINDING_DATA_URL。", 500);
+    const { token, sessionToken } = groupbuyCredentials(login, session, credentialOverrides);
+    if (!token) throw new AppError("拼团接口授权未配置，请联系管理员处理。", 500);
+    if (!sessionToken) {
+      throw new AppError("拼团接口授权未配置，请联系管理员处理。", 428);
+    }
     if (token) url.searchParams.set("token", token);
-    if (sessionToken) url.searchParams.set("session_token", sessionToken);
+    url.searchParams.set("session_token", sessionToken);
     url.searchParams.set("_yz_version", env.GROUPBUY_YZ_VERSION || "lite:4.73.3");
   }
   return url.toString();
@@ -885,10 +1047,11 @@ async function fetchJson(url, headers) {
     }
     if (payload?.code && Number(payload.code) !== 1) {
       const message = upstreamMessage(payload, `code ${payload.code}`);
-      const hint = isAuthExpiredMessage(message)
-        ? "拼团接口授权可能已过期，请更新 GROUPBUY_SESSION_TOKEN 或重新登录后再试。"
+      const authExpired = isAuthExpiredMessage(message);
+      const hint = authExpired
+        ? "拼团接口授权已过期，请联系管理员处理。"
         : "拼团接口返回业务错误，请检查门店、品牌、日期范围和接口参数。";
-      throw new AppError(`${hint} 原始提示：${message}`, 502, { upstreamCode: payload.code });
+      throw new AppError(`${hint} 原始提示：${message}`, 502, { upstreamCode: payload.code, authExpired });
     }
     return payload;
   } catch (error) {
@@ -899,6 +1062,42 @@ async function fetchJson(url, headers) {
   } finally {
     timeout.done();
   }
+}
+
+function isGroupbuyAuthError(error) {
+  return Boolean(error?.details?.authExpired) || isAuthExpiredMessage(error?.message || error);
+}
+
+async function runGroupbuyRefreshCommand() {
+  const command = String(env.GROUPBUY_REFRESH_COMMAND || "").trim();
+  if (!command) return null;
+  const { stdout } = await execFileAsync("sh", ["-lc", command], {
+    env: process.env,
+    timeout: Number(env.GROUPBUY_REFRESH_TIMEOUT_MS || 30000),
+    maxBuffer: 1024 * 1024 * 5
+  });
+  return parseGroupbuyCredentialInput(stdout);
+}
+
+async function refreshGroupbuyCredentials(session = {}) {
+  const commandCredentials = await runGroupbuyRefreshCommand();
+  if (commandCredentials?.token || commandCredentials?.sessionToken) {
+    return { ...commandCredentials, source: "command" };
+  }
+
+  try {
+    return await loginByLiteBackend();
+  } catch (error) {
+    console.warn(`[${new Date().toISOString()}] 拼团后台自动登录失败，尝试门店 CLI 兜底:`, error.message || error);
+  }
+
+  const login = await loginBySalonCli();
+  return {
+    token: loginValue(login, ["token", "access_token"]) || session.token || session.accessToken,
+    sessionToken: loginValue(login, ["session_token", "sessionToken"]) || session.sessionToken,
+    login,
+    source: "salon-login"
+  };
 }
 
 function getTotal(payload) {
@@ -917,18 +1116,24 @@ function getTotal(payload) {
   return undefined;
 }
 
-async function fetchPayload(filters = dateRangeFromSearch(), session = {}) {
+async function fetchPayloadOnce(filters, session = {}, credentialOverrides = {}) {
   if (env.GROUPBUY_DATA_FILE) {
     return JSON.parse(await readFile(path.resolve(projectRoot, env.GROUPBUY_DATA_FILE), "utf8"));
   }
 
-  const login = {
-    ...(await loginBySalonCli()),
+  let login = {
     token: session.token || session.accessToken,
     access_token: session.accessToken || session.token,
     session_token: session.sessionToken,
     sessionToken: session.sessionToken
   };
+  const currentCredentials = groupbuyCredentials(login, session, credentialOverrides);
+  if (!currentCredentials.token || !currentCredentials.sessionToken) {
+    login = {
+      ...(await loginBySalonCli()),
+      ...login
+    };
+  }
   const dataUrl = withGroupbuyFilters(env.GROUPBUY_DATA_URL || defaultDataUrl, filters);
   const headers = {
     accept: "application/json, text/plain, */*",
@@ -948,7 +1153,7 @@ async function fetchPayload(filters = dateRangeFromSearch(), session = {}) {
     let statusTotal;
     for (let page = 1; page <= maxPage; page += 1) {
       const payload = await fetchJson(
-        withPage(withOrderStatus(dataUrl, orderStatus), page, pageSize, login),
+        withPage(withOrderStatus(dataUrl, orderStatus), page, pageSize, login, session, credentialOverrides),
         headers
       );
       const pageRows = getRows(payload).map((row) => ({ ...row, __queryOrderStatus: orderStatus }));
@@ -976,6 +1181,40 @@ async function fetchPayload(filters = dateRangeFromSearch(), session = {}) {
   return { data: { list: rows, total: total || rows.length } };
 }
 
+async function fetchPayload(filters = dateRangeFromSearch(), session = {}) {
+  try {
+    return await fetchPayloadOnce(filters, session);
+  } catch (error) {
+    if ((env.GROUPBUY_AUTO_REFRESH || "true") !== "true" || !isGroupbuyAuthError(error)) {
+      throw error;
+    }
+
+    console.warn(`[${new Date().toISOString()}] 拼团接口授权失效，正在自动重新登录并重试。`);
+    let refreshed;
+    try {
+      refreshed = await refreshGroupbuyCredentials(session);
+    } catch (refreshError) {
+      console.error(`[${new Date().toISOString()}] 拼团接口自动刷新失败:`, refreshError.message || refreshError);
+      throw error;
+    }
+
+    const credentialOverrides = {
+      token: refreshed.token,
+      sessionToken: refreshed.sessionToken
+    };
+
+    try {
+      const payload = await fetchPayloadOnce(filters, session, credentialOverrides);
+      await persistRefreshedGroupbuyCredentials(credentialOverrides);
+      console.log(`[${new Date().toISOString()}] 拼团接口自动刷新成功，来源：${refreshed.source || "unknown"}。`);
+      return payload;
+    } catch (retryError) {
+      console.error(`[${new Date().toISOString()}] 拼团接口自动刷新后仍失败:`, retryError.message || retryError);
+      throw error;
+    }
+  }
+}
+
 function bindingRows(payload) {
   return asArray(getByPath(payload, env.BINDING_LIST_PATH || "response.data"));
 }
@@ -998,6 +1237,29 @@ function countBindingRows(rows, phoneFields) {
   };
 }
 
+function bindingDateValue(row, preferredField) {
+  const candidates = [
+    preferredField,
+    "created_at",
+    "create_time",
+    "created_time",
+    "create_at",
+    "bind_time",
+    "binding_time",
+    "bound_at",
+    "register_time",
+    "registered_at",
+    "updated_at",
+    "time",
+    "date"
+  ].filter(Boolean);
+  for (const field of candidates) {
+    const value = getByPath(row, field);
+    if (formatDateKey(value)) return value;
+  }
+  return "";
+}
+
 function buildBindingBoard(payload) {
   const rows = bindingRows(payload);
   const phoneFields = String(env.BINDING_PHONE_FIELD || "phone,mobile,handset,tel")
@@ -1005,13 +1267,16 @@ function buildBindingBoard(payload) {
     .map((field) => field.trim())
     .filter(Boolean);
   const reportDate = env.REPORT_DATE || todayKey();
+  const yesterdayDate = env.REPORT_YESTERDAY_DATE || offsetDateKey(-1);
   const dateField = env.BINDING_DATE_FIELD || "created_at";
-  const todayRows = rows.filter((row) => formatDateKey(getByPath(row, dateField)) === reportDate);
+  const dateKeyForRow = (row) => formatDateKey(bindingDateValue(row, dateField));
+  const todayRows = rows.filter((row) => dateKeyForRow(row) === reportDate);
+  const yesterdayRows = rows.filter((row) => dateKeyForRow(row) === yesterdayDate);
   const partnerNameField = env.PARTNER_NAME_FIELD || "retail_store_name";
   const partnerIdField = env.PARTNER_ID_FIELD || "retail_store_id";
   const partnerMap = new Map();
 
-  for (const row of todayRows) {
+  for (const row of rows) {
     const id = getByPath(row, partnerIdField) || getByPath(row, partnerNameField) || "unknown";
     const name = String(getByPath(row, partnerNameField) || "未命名合伙人").trim();
     const current = partnerMap.get(id) || { id, name, rows: [] };
@@ -1019,22 +1284,38 @@ function buildBindingBoard(payload) {
     partnerMap.set(id, current);
   }
 
-  const topPartners = [...partnerMap.values()]
-    .map((partner) => ({
-      id: partner.id,
-      name: partner.name,
-      ...countBindingRows(partner.rows, phoneFields)
-    }))
-    .sort((a, b) => b.totalBindings - a.totalBindings || b.phoneObtained - a.phoneObtained)
-    .slice(0, Number(env.TOP_PARTNER_LIMIT || 20));
+  const partners = [...partnerMap.values()]
+    .map((partner) => {
+      const partnerTodayRows = partner.rows.filter((row) => dateKeyForRow(row) === reportDate);
+      const partnerYesterdayRows = partner.rows.filter((row) => dateKeyForRow(row) === yesterdayDate);
+      return {
+        id: partner.id,
+        name: partner.name,
+        cumulative: countBindingRows(partner.rows, phoneFields),
+        today: countBindingRows(partnerTodayRows, phoneFields),
+        yesterday: countBindingRows(partnerYesterdayRows, phoneFields)
+      };
+    })
+    .sort((a, b) =>
+      b.cumulative.totalBindings - a.cumulative.totalBindings ||
+      b.today.totalBindings - a.today.totalBindings ||
+      b.cumulative.phoneObtained - a.cumulative.phoneObtained
+    );
 
   return {
     generatedAt: new Date().toISOString(),
     generatedAtText: new Date().toLocaleString("zh-CN", { hour12: false }),
     reportDate,
+    yesterdayDate,
     cumulative: countBindingRows(rows, phoneFields),
     today: countBindingRows(todayRows, phoneFields),
-    topPartners,
+    yesterday: countBindingRows(yesterdayRows, phoneFields),
+    partners,
+    topPartners: partners.slice(0, Number(env.TOP_PARTNER_LIMIT || 20)).map((partner) => ({
+      id: partner.id,
+      name: partner.name,
+      ...partner.today
+    })),
     sourceRows: rows.length
   };
 }
@@ -1063,21 +1344,21 @@ function bindingTotal(payload) {
 function bindingAuthContext(session = {}) {
   const token =
     env.BINDING_TOKEN ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
     session.token ||
-    session.accessToken;
+    session.accessToken ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "token");
   const sessionToken =
     env.BINDING_SESSION_TOKEN ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
-    session.sessionToken;
+    session.sessionToken ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token");
   const salonId =
     env.BINDING_SALON_ID ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "salon_id") ||
-    session.salonId;
+    session.salonId ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "salon_id");
   const brandId =
     env.BINDING_BRAND_ID ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "brand_id") ||
-    session.brandId;
+    session.brandId ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "brand_id");
   const zoneId =
     session.zoneId ||
     env.BINDING_ZONE_ID ||
@@ -1420,7 +1701,6 @@ async function handleRequest(req, res) {
       await jsonResponse(res, 200, {
         ok: true,
         uptimeSeconds: Math.round(process.uptime()),
-        cacheKeys: boardCache.size,
         time: new Date().toISOString()
       });
       return;
@@ -1481,38 +1761,35 @@ async function handleRequest(req, res) {
       return;
     }
 
+    if (url.pathname === "/api/groupbuy/session" && req.method === "POST") {
+      if ((env.GROUPBUY_ALLOW_BROWSER_SESSION_UPDATE || "false") !== "true") {
+        await jsonResponse(res, 404, { error: "Not found" });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const result = await saveGroupbuyCredentials(body.sessionToken || body.url || body.value);
+      await jsonResponse(res, 200, { ok: true, ...result });
+      return;
+    }
+
     if (url.pathname === "/api/groupbuy") {
       const filters = dateRangeFromSearch(url.searchParams);
-      const key = cacheKey("groupbuy", filters);
       try {
         const payload = await fetchPayload(filters, session);
         const board = buildBoard(payload, filters);
-        setCachedBoard(key, board);
         await jsonResponse(res, 200, board);
       } catch (error) {
-        const cached = cachedBoardOnFailure(key, error);
-        if (cached) {
-          await jsonResponse(res, 200, cached);
-          return;
-        }
         throw error;
       }
       return;
     }
 
     if (url.pathname === "/api/binding") {
-      const key = cacheKey("binding", { reportDate: env.REPORT_DATE || todayKey() });
       try {
         const payload = await fetchBindingPayload(session);
         const board = buildBindingBoard(payload);
-        setCachedBoard(key, board);
         await jsonResponse(res, 200, board);
       } catch (error) {
-        const cached = cachedBoardOnFailure(key, error);
-        if (cached) {
-          await jsonResponse(res, 200, cached);
-          return;
-        }
         throw error;
       }
       return;
