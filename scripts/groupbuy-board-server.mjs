@@ -977,35 +977,86 @@ function bindingTotal(payload) {
   return undefined;
 }
 
-function withBindingPage(urlText, page, pageSize) {
+function bindingAuthContext(session = {}) {
+  const token =
+    session.token ||
+    session.accessToken ||
+    env.BINDING_TOKEN ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "token");
+  const sessionToken =
+    session.sessionToken ||
+    env.BINDING_SESSION_TOKEN ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token");
+  const salonId =
+    session.salonId ||
+    env.BINDING_SALON_ID ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "salon_id");
+  const brandId =
+    session.brandId ||
+    env.BINDING_BRAND_ID ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "brand_id");
+  const zoneId =
+    session.zoneId ||
+    env.BINDING_ZONE_ID ||
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "zone_id") ||
+    "1";
+
+  return { token, sessionToken, salonId, brandId, zoneId };
+}
+
+function withBindingPage(urlText, page, pageSize, session = {}) {
   const url = new URL(urlText);
+  const { token, sessionToken, salonId, brandId, zoneId } = bindingAuthContext(session);
   url.searchParams.set(env.BINDING_PAGE_PARAM || "page", String(page));
   url.searchParams.set(env.BINDING_PAGE_SIZE_PARAM || "page_size", String(pageSize));
+  if (!url.searchParams.get("search_type")) url.searchParams.set("search_type", env.BINDING_SEARCH_TYPE || "1");
+  if (!url.searchParams.has("keyword")) url.searchParams.set("keyword", env.BINDING_KEYWORD || "");
+  if (token) url.searchParams.set("token", token);
+  if (sessionToken) url.searchParams.set("session_token", sessionToken);
+  if (salonId) url.searchParams.set("salon_id", salonId);
+  if (brandId) url.searchParams.set("brand_id", brandId);
+  if (zoneId) url.searchParams.set("zone_id", zoneId);
   return url.toString();
 }
 
-async function fetchBindingJson(url) {
+async function fetchBindingJson(url, session = {}) {
   const method = env.BINDING_DATA_METHOD || "GET";
+  const { token, zoneId } = bindingAuthContext(session);
+  const zone = String(zoneId || "1").replace(/^z/i, "");
   const response = await fetch(url, {
     method,
     headers: {
       accept: "application/json",
+      origin: "https://sy-z1.meimeifa.com",
+      referer: "https://sy-z1.meimeifa.com/",
+      ...(token
+        ? {
+            "mmf-token": token,
+            "mmf-zone": `z${zone}`,
+            zone: `z${zone}`,
+            "app-env": "prd"
+          }
+        : {}),
       ...(env.BINDING_DATA_BODY ? { "content-type": "application/json" } : {})
     },
     body: env.BINDING_DATA_BODY || undefined
   });
   if (!response.ok) throw new Error(`绑定数据源请求失败：HTTP ${response.status}`);
-  return response.json();
+  const payload = await response.json();
+  if (payload?.code && Number(payload.code) !== 1) {
+    throw new Error(`绑定数据源返回错误：${payload.msg || payload.message || `code ${payload.code}`}`);
+  }
+  return payload;
 }
 
-async function fetchBindingPayload() {
+async function fetchBindingPayload(session = {}) {
   const defaultDataFile = "./data/binding-sample.json";
   if (env.BINDING_DATA_FILE || !env.BINDING_DATA_URL) {
     return JSON.parse(await readFile(path.resolve(projectRoot, env.BINDING_DATA_FILE || defaultDataFile), "utf8"));
   }
 
   if ((env.BINDING_PAGINATE || "false") !== "true") {
-    return fetchBindingJson(env.BINDING_DATA_URL);
+    return fetchBindingJson(withBindingPage(env.BINDING_DATA_URL, 1, Number(env.BINDING_PAGE_SIZE || 100), session), session);
   }
 
   const pageSize = Number(env.BINDING_PAGE_SIZE || 100);
@@ -1014,7 +1065,7 @@ async function fetchBindingPayload() {
   let total;
 
   for (let page = 1; page <= maxPage; page += 1) {
-    const payload = await fetchBindingJson(withBindingPage(env.BINDING_DATA_URL, page, pageSize));
+    const payload = await fetchBindingJson(withBindingPage(env.BINDING_DATA_URL, page, pageSize, session), session);
     const pageRows = bindingPayloadRows(payload);
     if (total === undefined) total = bindingTotal(payload);
     rows.push(...pageRows);
@@ -1292,6 +1343,7 @@ async function handleRequest(req, res) {
         sessionToken: user.sessionToken,
         salonId: user.salonId,
         brandId: user.brandId,
+        zoneId: user.zoneId,
         createdAt: Date.now(),
         expiresAt: Date.now() + sessionTtlMs
       });
@@ -1333,7 +1385,7 @@ async function handleRequest(req, res) {
     }
 
     if (url.pathname === "/api/binding") {
-      const payload = await fetchBindingPayload();
+      const payload = await fetchBindingPayload(session);
       const board = buildBindingBoard(payload);
       await textResponse(res, 200, JSON.stringify(board), "application/json; charset=utf-8");
       return;
