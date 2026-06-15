@@ -1,0 +1,16 @@
+{
+  "name": "hengyi-meiyuan-data-push",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "push:binding": "node scripts/push-binding-stats.mjs",
+    "push:binding:dry": "node scripts/push-binding-stats.mjs --dry-run",
+    "push:binding:top10": "node scripts/push-binding-stats.mjs --top10-only",
+    "push:binding:top10:dry": "node scripts/push-binding-stats.mjs --dry-run --top10-only",
+    "groupbuy:board": "node scripts/groupbuy-board-server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

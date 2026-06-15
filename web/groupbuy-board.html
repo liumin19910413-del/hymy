@@ -1,0 +1,1181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>恒奕美源数据看板</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #161a22;
+        --muted: #6b7280;
+        --subtle: #9aa3af;
+        --line: #e1e6ee;
+        --line-strong: #cfd7e4;
+        --soft: #f3f6f8;
+        --panel: #ffffff;
+        --panel-soft: #f9faf7;
+        --brand: #0f766e;
+        --brand-strong: #0b5f59;
+        --brand-soft: #e4f5ef;
+        --commerce: #1f6f46;
+        --warn: #b86b16;
+        --ok: #16803c;
+        --accent: #315c82;
+        --sidebar: #111816;
+        --sidebar-soft: #18231f;
+        --white: #fff;
+        --shadow: 0 18px 48px rgba(22, 26, 34, 0.08);
+        --shadow-soft: 0 8px 24px rgba(22, 26, 34, 0.06);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+          sans-serif;
+        color: var(--ink);
+        background:
+          linear-gradient(180deg, #fbfcfa 0, #f3f6f8 240px),
+          var(--soft);
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 236px 1fr;
+      }
+
+      aside {
+        position: sticky;
+        top: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(180deg, rgba(31, 111, 70, 0.2), rgba(17, 24, 22, 0) 260px),
+          var(--sidebar);
+        color: var(--white);
+        padding: 18px 14px;
+      }
+
+      .brand {
+        display: grid;
+        grid-template-columns: 38px 1fr;
+        gap: 10px;
+        align-items: center;
+        padding: 4px 6px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 8px;
+        background: #d4f9e0;
+        color: #10201f;
+        font-weight: 850;
+      }
+
+      .brand-title {
+        font-size: 17px;
+        font-weight: 800;
+        line-height: 1.15;
+      }
+
+      .brand-sub {
+        margin-top: 4px;
+        color: rgba(255, 255, 255, 0.66);
+        font-size: 12px;
+      }
+
+      .page-nav {
+        display: grid;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .page-tab {
+        width: 100%;
+        height: 42px;
+        border: 0;
+        border-radius: 8px;
+        padding: 0 12px;
+        text-align: left;
+        color: rgba(255, 255, 255, 0.72);
+        background: transparent;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+      }
+
+      .page-tab:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--white);
+      }
+
+      .page-tab.active {
+        color: #10201f;
+        background: #d4f9e0;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+      }
+
+      .main {
+        min-width: 0;
+      }
+
+      header {
+        background: rgba(255, 255, 255, 0.86);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(16px);
+      }
+
+      .topbar,
+      main {
+        width: min(1280px, calc(100vw - 300px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 20px 0;
+      }
+
+      .top-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 23px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .sub {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      button,
+      input {
+        height: 38px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--white);
+        color: var(--ink);
+        font: inherit;
+      }
+
+      input {
+        transition:
+          border-color 0.18s ease,
+          box-shadow 0.18s ease,
+          background 0.18s ease;
+      }
+
+      input:focus {
+        outline: 0;
+        border-color: #83b5a7;
+        box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+      }
+
+      .primary {
+        padding: 0 16px;
+        border-color: var(--brand);
+        border-radius: 8px;
+        background: linear-gradient(180deg, #128278, var(--brand-strong));
+        color: var(--white);
+        cursor: pointer;
+        font-weight: 700;
+        box-shadow: 0 8px 18px rgba(15, 118, 110, 0.18);
+      }
+
+      .primary:hover {
+        background: linear-gradient(180deg, #159185, #0b5f59);
+      }
+
+      .primary:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      .secondary {
+        display: inline-grid;
+        place-items: center;
+        height: 38px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        text-decoration: none;
+        font-weight: 700;
+        font-size: 13px;
+      }
+
+      .secondary:hover {
+        border-color: var(--line-strong);
+        color: var(--ink);
+      }
+
+      main {
+        padding: 20px 0 36px;
+      }
+
+      .page {
+        display: none;
+      }
+
+      .page.active {
+        display: block;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .filters {
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) 150px 150px auto;
+        gap: 12px;
+        align-items: end;
+        margin-bottom: 14px;
+        padding: 14px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .field label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .metric {
+        position: relative;
+        overflow: hidden;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        min-height: 94px;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .metric::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        height: 3px;
+        background: var(--brand);
+      }
+
+      .metric:nth-child(2)::before {
+        background: var(--accent);
+      }
+
+      .metric:nth-child(4)::before {
+        background: var(--commerce);
+      }
+
+      .metric:nth-child(5)::before,
+      .metric:nth-child(6)::before {
+        background: var(--warn);
+      }
+
+      .metric .label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .metric .value {
+        margin-top: 12px;
+        font-size: 25px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .metric.loading::before {
+        background: #d6e5dd;
+      }
+
+      .skeleton-line {
+        display: block;
+        position: relative;
+        overflow: hidden;
+        height: 12px;
+        border-radius: 999px;
+        background: #edf2f0;
+      }
+
+      .skeleton-line.wide {
+        width: 74%;
+      }
+
+      .skeleton-line.value {
+        width: 58%;
+        height: 26px;
+        margin-top: 14px;
+      }
+
+      .skeleton-line::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.72), transparent);
+        animation: shimmer 1.25s infinite;
+      }
+
+      @keyframes shimmer {
+        100% {
+          transform: translateX(100%);
+        }
+      }
+
+      section {
+        margin-top: 16px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 64px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, #fff, #fbfcfe);
+      }
+
+      h2 {
+        margin: 0;
+        font-size: 16px;
+        letter-spacing: 0;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .tabs {
+        display: grid;
+        align-content: start;
+        gap: 7px;
+        padding: 12px;
+        border-right: 1px solid var(--line);
+        background: var(--panel-soft);
+      }
+
+      .tab {
+        width: 100%;
+        height: 38px;
+        padding: 0 12px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      .tab:hover {
+        background: #eef3f1;
+        color: var(--ink);
+      }
+
+      .tab.active {
+        border-color: #b7d8d4;
+        background: var(--brand-soft);
+        color: var(--brand-strong);
+        box-shadow: inset 3px 0 0 var(--brand);
+      }
+
+      .board-shell {
+        display: grid;
+        grid-template-columns: 164px minmax(0, 1fr);
+        min-height: 420px;
+        min-width: 0;
+      }
+
+      .board-shell > div {
+        min-width: 0;
+      }
+
+      .tab-panel {
+        display: none;
+      }
+
+      .tab-panel.active {
+        display: block;
+        min-width: 0;
+      }
+
+      .leader-list {
+        padding: 6px 10px;
+      }
+
+      .leader {
+        display: grid;
+        grid-template-columns: 34px 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 8px;
+        border-bottom: 1px solid #edf1f5;
+      }
+
+      .leader:hover {
+        background: #fbfcfe;
+      }
+
+      .leader:last-child {
+        border-bottom: 0;
+      }
+
+      .rank {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        background: #e7f5f2;
+        color: var(--brand-strong);
+        font-weight: 800;
+      }
+
+      .name {
+        font-weight: 750;
+      }
+
+      .meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .remain {
+        text-align: right;
+        color: var(--warn);
+        font-weight: 800;
+      }
+
+      .remain span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 500;
+        margin-top: 3px;
+      }
+
+      .toolbar {
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+      }
+
+      input {
+        width: 100%;
+        padding: 0 10px;
+      }
+
+      input[type="date"] {
+        min-width: 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1px solid #edf1f5;
+        text-align: left;
+        font-size: 13px;
+        vertical-align: top;
+        overflow-wrap: anywhere;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        background: #f6f8fb;
+      }
+
+      tbody tr:hover td {
+        background: #fbfcfe;
+      }
+
+      .empty,
+      .error {
+        padding: 24px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .error {
+        color: #b42318;
+      }
+
+      .loading-state {
+        display: grid;
+        place-items: center;
+        gap: 10px;
+        min-height: 180px;
+        padding: 28px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .loading-spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 3px solid #dbe7e2;
+        border-top-color: var(--brand);
+        animation: spin 0.85s linear infinite;
+      }
+
+      .loading-title {
+        color: var(--ink);
+        font-weight: 800;
+      }
+
+      .loading-copy {
+        font-size: 12px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (max-width: 960px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        aside {
+          position: sticky;
+          top: 0;
+          z-index: 10;
+          min-height: auto;
+          padding: 10px;
+        }
+
+        .brand {
+          display: none;
+        }
+
+        .page-nav {
+          display: flex;
+          margin-top: 0;
+        }
+
+        .page-tab {
+          text-align: center;
+        }
+
+        .topbar,
+        main {
+          width: min(100vw - 24px, 1240px);
+        }
+
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .filters {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .board-shell {
+          grid-template-columns: 1fr;
+          min-height: 0;
+        }
+
+        .tabs {
+          display: flex;
+          flex-direction: row;
+          align-items: center;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+          overflow-x: auto;
+          min-height: 51px;
+        }
+
+        .tab {
+          flex: 0 0 auto;
+          width: auto;
+          text-align: center;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .filters {
+          grid-template-columns: 1fr;
+        }
+
+        table {
+          min-width: 780px;
+        }
+
+        .table-scroll {
+          overflow-x: auto;
+        }
+      }
+
+      @media (max-width: 360px) {
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside>
+        <div class="brand">
+          <div class="brand-mark">HY</div>
+          <div>
+            <div class="brand-title">恒奕美源</div>
+            <div class="brand-sub">商户数据后台</div>
+          </div>
+        </div>
+        <nav class="page-nav" aria-label="页面切换">
+          <button class="page-tab active" type="button" data-page="groupbuy">拼团订单</button>
+          <button class="page-tab" type="button" data-page="binding">绑定数据</button>
+        </nav>
+      </aside>
+
+      <div class="main">
+        <header>
+          <div class="topbar">
+            <div>
+              <h1 id="pageTitle">恒奕美源拼团订单看板</h1>
+              <div class="sub" id="subtitle">正在读取本月拼团数据</div>
+            </div>
+            <div class="top-actions">
+              <button class="primary" id="refreshBtn" type="button">刷新数据</button>
+              <a class="secondary" href="/logout">退出登录</a>
+            </div>
+          </div>
+        </header>
+
+        <main>
+          <div class="page active" id="page-groupbuy">
+            <div class="filters" aria-label="拼团筛选">
+              <div class="field">
+                <label for="productSearchInput">拼团商品名</label>
+                <input id="productSearchInput" placeholder="全部拼团商品" />
+              </div>
+              <div class="field">
+                <label for="beginDateInput">开始日期</label>
+                <input id="beginDateInput" type="date" />
+              </div>
+              <div class="field">
+                <label for="endDateInput">结束日期</label>
+                <input id="endDateInput" type="date" />
+              </div>
+              <button class="primary" id="applyGroupbuyFilterBtn" type="button">查询</button>
+            </div>
+
+            <div class="metrics" id="groupbuyMetrics"></div>
+
+            <section>
+              <div class="board-shell">
+                <div class="tabs" role="tablist" aria-label="拼团榜单切换">
+                  <button class="tab active" type="button" data-tab="spu">SPU汇总</button>
+                  <button class="tab" type="button" data-tab="pending">未成团</button>
+                  <button class="tab" type="button" data-tab="success">已成团</button>
+                  <button class="tab" type="button" data-tab="detail">未成团明细</button>
+                </div>
+
+                <div>
+                  <div class="tab-panel active" id="panel-spu">
+                    <div class="section-head">
+                      <div>
+                        <h2>SPU 拼团汇总</h2>
+                        <div class="hint" id="spuHint">按拼团商品名汇总本月全部拼团订单</div>
+                      </div>
+                    </div>
+                    <div class="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>拼团商品名</th>
+                            <th style="width: 92px">开团数</th>
+                            <th style="width: 92px">订单数</th>
+                            <th style="width: 108px">金额</th>
+                            <th style="width: 92px">已成团</th>
+                            <th style="width: 92px">未成团</th>
+                            <th style="width: 92px">成团率</th>
+                          </tr>
+                        </thead>
+                        <tbody id="spuRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div class="tab-panel" id="panel-pending">
+                    <div class="section-head">
+                      <div>
+                        <h2>未成团 TOP10</h2>
+                        <div class="hint">按还差单数从少到多排序</div>
+                      </div>
+                    </div>
+                    <div class="leader-list" id="topList"></div>
+                  </div>
+
+                  <div class="tab-panel" id="panel-success">
+                    <div class="section-head">
+                      <div>
+                        <h2>已成团列表</h2>
+                        <div class="hint" id="successHint">显示当前范围内已成团团长</div>
+                      </div>
+                    </div>
+                    <div class="leader-list" id="successList"></div>
+                  </div>
+
+                  <div class="tab-panel" id="panel-detail">
+                    <div class="section-head">
+                      <div>
+                        <h2>未成团明细</h2>
+                        <div class="hint" id="detailHint">支持按团长、手机号、标题搜索</div>
+                      </div>
+                    </div>
+                    <div class="toolbar">
+                      <input id="searchInput" placeholder="搜索团长 / 手机号 / 标题" />
+                    </div>
+                    <div class="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th style="width: 100px">团长</th>
+                            <th style="width: 120px">手机号</th>
+                            <th style="width: 92px">有效单数</th>
+                            <th style="width: 100px">金额</th>
+                            <th style="width: 88px">还差</th>
+                            <th style="width: 130px">开团时间</th>
+                            <th>标题</th>
+                          </tr>
+                        </thead>
+                        <tbody id="detailRows"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="page" id="page-binding">
+            <div class="metrics" id="bindingMetrics"></div>
+
+            <section>
+              <div class="section-head">
+                <div>
+                  <h2>今日合伙人绑定 TOP20</h2>
+                  <div class="hint" id="bindingHint">按今日绑定数排序</div>
+                </div>
+              </div>
+              <div class="leader-list" id="bindingTopList"></div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const state = {
+        activePage: "groupbuy",
+        groupbuy: null,
+        binding: null,
+        groupbuyFilters: {
+          keyword: "",
+          beginDate: "",
+          endDate: ""
+        },
+        groupbuyQuery: "",
+        groupbuyTab: "spu"
+      };
+
+      const $ = (id) => document.getElementById(id);
+      const money = (value) => `¥${Number(value || 0).toFixed(2)}`;
+      const pct = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
+      const dateKey = (date) =>
+        [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+
+      function currentMonthRange() {
+        const now = new Date();
+        return {
+          beginDate: dateKey(new Date(now.getFullYear(), now.getMonth(), 1)),
+          endDate: dateKey(now)
+        };
+      }
+
+      function metric(label, value) {
+        return `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+      }
+
+      function loadingMetric() {
+        return '<div class="metric loading"><span class="skeleton-line wide"></span><span class="skeleton-line value"></span></div>';
+      }
+
+      function loadingState(title = "数据正在加载中", copy = "正在连接数据源并计算当前筛选范围，请稍等") {
+        return `
+          <div class="loading-state">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <div>
+              <div class="loading-title">${title}</div>
+              <div class="loading-copy">${copy}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderGroupbuyLoading() {
+        $("groupbuyMetrics").innerHTML = Array.from({ length: 6 }, loadingMetric).join("");
+        $("spuHint").textContent = "正在读取拼团订单并按 SPU 汇总";
+        $("successHint").textContent = "正在读取当前范围内已成团团长";
+        $("detailHint").textContent = "正在读取未成团明细";
+        $("spuRows").innerHTML = `<tr><td colspan="7">${loadingState()}</td></tr>`;
+        $("topList").innerHTML = loadingState("未成团榜单加载中", "正在按还差单数排序");
+        $("successList").innerHTML = loadingState("已成团列表加载中", "正在统计当前范围内成团记录");
+        $("detailRows").innerHTML = `<tr><td colspan="7">${loadingState("明细加载中", "正在整理团长、手机号和商品标题")}</td></tr>`;
+      }
+
+      function renderBindingLoading() {
+        $("bindingMetrics").innerHTML = Array.from({ length: 6 }, loadingMetric).join("");
+        $("bindingHint").textContent = "正在读取合伙人绑定数据";
+        $("bindingTopList").innerHTML = loadingState("绑定榜单加载中", "正在按今日绑定数排序");
+      }
+
+      function renderGroupbuyMetrics(board) {
+        $("groupbuyMetrics").innerHTML = [
+          metric("有效订单", `${board.summary.totalOrders} 单`),
+          metric("有效金额", money(board.summary.totalAmount)),
+          metric("开团数", `${board.summary.totalGroups} 个`),
+          metric("已成团", `${board.summary.successGroups} 个`),
+          metric("未成团", `${board.summary.pendingGroups} 个`),
+          metric("成团率", pct(board.summary.successRate))
+        ].join("");
+      }
+
+      function renderBindingMetrics(board) {
+        $("bindingMetrics").innerHTML = [
+          metric("累计绑定", board.cumulative.totalBindings),
+          metric("累计有号", board.cumulative.phoneObtained),
+          metric("累计无号", board.cumulative.phoneMissing),
+          metric("今日新增", board.today.totalBindings),
+          metric("今日有号", board.today.phoneObtained),
+          metric("今日获取率", pct(board.today.phoneRate))
+        ].join("");
+      }
+
+      function renderSpuGroups(board) {
+        const rows = board.spuGroups || [];
+        const keyword = board.keyword ? `，商品名包含“${board.keyword}”` : "，全部拼团商品";
+        $("spuHint").textContent = `当前显示 ${rows.length} 个 SPU，统计范围 ${board.reportDate}${keyword}`;
+        if (rows.length === 0) {
+          $("spuRows").innerHTML = '<tr><td colspan="7"><div class="empty">没有匹配的拼团商品</div></td></tr>';
+          return;
+        }
+        $("spuRows").innerHTML = rows
+          .map(
+            (item) => `
+              <tr>
+                <td>${item.title || "未命名拼团商品"}</td>
+                <td>${item.totalGroups}</td>
+                <td>${item.totalOrders}</td>
+                <td>${money(item.totalAmount)}</td>
+                <td>${item.successGroups}</td>
+                <td>${item.pendingGroups}</td>
+                <td>${pct(item.successRate)}</td>
+              </tr>
+            `
+          )
+          .join("");
+      }
+
+      function leaderRow(item, index, rightHtml, metaHtml) {
+        return `
+          <div class="leader">
+            <div class="rank">${index + 1}</div>
+            <div>
+              <div class="name">${item.leaderName || item.name}</div>
+              <div class="meta">${metaHtml}</div>
+            </div>
+            <div class="remain">${rightHtml}</div>
+          </div>
+        `;
+      }
+
+      function renderPendingTop(board) {
+        const rows = board.pendingTop10 || [];
+        if (rows.length === 0) {
+          $("topList").innerHTML = '<div class="empty">当前范围暂无未成团数据</div>';
+          return;
+        }
+        $("topList").innerHTML = rows
+          .map((item, index) =>
+            leaderRow(
+              item,
+              index,
+              `${item.remaining} 单<span>还差</span>`,
+              `${item.leaderPhoneMasked} ｜ 有效 ${item.paidOrders} 单 ｜ ${money(item.amount)}`
+            )
+          )
+          .join("");
+      }
+
+      function renderSuccessList(board) {
+        const rows = board.succeeded || [];
+        $("successHint").textContent = `当前已成团 ${rows.length} 个`;
+        if (rows.length === 0) {
+          $("successList").innerHTML = '<div class="empty">当前范围暂无已成团数据</div>';
+          return;
+        }
+        $("successList").innerHTML = rows
+          .map((item, index) =>
+            leaderRow(
+              item,
+              index,
+              `已成团<span>${item.title || "拼团商品"}</span>`,
+              `${item.leaderPhoneMasked} ｜ 有效 ${item.paidOrders} 单 ｜ ${money(item.amount)}`
+            )
+          )
+          .join("");
+      }
+
+      function filteredPendingRows() {
+        const board = state.groupbuy;
+        if (!board) return [];
+        const q = state.groupbuyQuery.trim().toLowerCase();
+        return (board.pending || []).filter((item) => {
+          const text = `${item.leaderName} ${item.leaderPhone} ${item.leaderPhoneMasked} ${item.title}`.toLowerCase();
+          return !q || text.includes(q);
+        });
+      }
+
+      function renderPendingDetail() {
+        const rows = filteredPendingRows();
+        $("detailHint").textContent = `当前显示 ${rows.length} 条，支持按团长、手机号、标题搜索`;
+        if (rows.length === 0) {
+          $("detailRows").innerHTML = '<tr><td colspan="7"><div class="empty">没有匹配的数据</div></td></tr>';
+          return;
+        }
+        $("detailRows").innerHTML = rows
+          .map(
+            (item) => `
+              <tr>
+                <td>${item.leaderName}</td>
+                <td>${item.leaderPhoneMasked}</td>
+                <td>${item.paidOrders}</td>
+                <td>${money(item.amount)}</td>
+                <td>${item.remaining} 单</td>
+                <td>${item.createdAt || "未知"}</td>
+                <td>${item.title || "未命名活动"}</td>
+              </tr>
+            `
+          )
+          .join("");
+      }
+
+      function renderBindingTop(board) {
+        const rows = board.topPartners || [];
+        $("bindingHint").textContent = `当前显示 ${rows.length} 位合伙人，统计日期 ${board.reportDate}`;
+        if (rows.length === 0) {
+          $("bindingTopList").innerHTML = '<div class="empty">今日暂无合伙人绑定数据</div>';
+          return;
+        }
+        $("bindingTopList").innerHTML = rows
+          .map((item, index) =>
+            leaderRow(
+              item,
+              index,
+              `${item.totalBindings} 个<span>绑定</span>`,
+              `有号 ${item.phoneObtained} ｜ 无号 ${item.phoneMissing} ｜ 获取率 ${pct(item.phoneRate)}`
+            )
+          )
+          .join("");
+      }
+
+      function renderGroupbuy(board) {
+        state.groupbuy = board;
+        if (board.filters) {
+          state.groupbuyFilters = {
+            keyword: board.filters.keyword || "",
+            beginDate: board.filters.beginDate || state.groupbuyFilters.beginDate,
+            endDate: board.filters.endDate || state.groupbuyFilters.endDate
+          };
+          $("productSearchInput").value = state.groupbuyFilters.keyword;
+          $("beginDateInput").value = state.groupbuyFilters.beginDate;
+          $("endDateInput").value = state.groupbuyFilters.endDate;
+        }
+        renderGroupbuyMetrics(board);
+        renderSpuGroups(board);
+        renderPendingTop(board);
+        renderSuccessList(board);
+        renderPendingDetail();
+        renderInnerTabs();
+      }
+
+      function renderBinding(board) {
+        state.binding = board;
+        renderBindingMetrics(board);
+        renderBindingTop(board);
+      }
+
+      function renderShell() {
+        document.querySelectorAll(".page-tab").forEach((button) => {
+          button.classList.toggle("active", button.dataset.page === state.activePage);
+        });
+        document.querySelectorAll(".page").forEach((page) => {
+          page.classList.toggle("active", page.id === `page-${state.activePage}`);
+        });
+        $("pageTitle").textContent =
+          state.activePage === "groupbuy" ? "恒奕美源拼团订单看板" : "恒奕美源绑定数据看板";
+        const board = state.activePage === "groupbuy" ? state.groupbuy : state.binding;
+        $("subtitle").textContent = board
+          ? `日期：${board.reportDate} ｜ 统计截止：${board.generatedAtText}`
+          : "正在读取本月拼团数据";
+      }
+
+      function renderInnerTabs() {
+        document.querySelectorAll(".tab").forEach((button) => {
+          button.classList.toggle("active", button.dataset.tab === state.groupbuyTab);
+        });
+        document.querySelectorAll(".tab-panel").forEach((panel) => {
+          panel.classList.toggle("active", panel.id === `panel-${state.groupbuyTab}`);
+        });
+      }
+
+      async function fetchJson(path) {
+        const response = await fetch(path, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "读取失败");
+        return data;
+      }
+
+      function groupbuyApiPath() {
+        const params = new URLSearchParams();
+        if (state.groupbuyFilters.keyword) params.set("keyword", state.groupbuyFilters.keyword);
+        if (state.groupbuyFilters.beginDate) params.set("begin_date", state.groupbuyFilters.beginDate);
+        if (state.groupbuyFilters.endDate) params.set("end_date", state.groupbuyFilters.endDate);
+        const query = params.toString();
+        return query ? `/api/groupbuy?${query}` : "/api/groupbuy";
+      }
+
+      async function refresh() {
+        const button = $("refreshBtn");
+        button.disabled = true;
+        button.textContent = "刷新中";
+        if (state.activePage === "groupbuy") {
+          renderGroupbuyLoading();
+        } else {
+          renderBindingLoading();
+        }
+        try {
+          if (state.activePage === "groupbuy") {
+            renderGroupbuy(await fetchJson(groupbuyApiPath()));
+          } else {
+            renderBinding(await fetchJson("/api/binding"));
+          }
+          renderShell();
+        } catch (error) {
+          const text = `<div class="error">${error.message || error}</div>`;
+          if (state.activePage === "groupbuy") {
+            $("spuRows").innerHTML = '<tr><td colspan="7"><div class="error">数据读取失败，请检查本地服务日志</div></td></tr>';
+            $("topList").innerHTML = text;
+            $("successList").innerHTML = text;
+            $("detailRows").innerHTML = '<tr><td colspan="7"><div class="error">数据读取失败，请检查本地服务日志</div></td></tr>';
+          } else {
+            $("bindingTopList").innerHTML = text;
+          }
+        } finally {
+          button.disabled = false;
+          button.textContent = "刷新数据";
+        }
+      }
+
+      async function switchPage(page) {
+        state.activePage = page;
+        renderShell();
+        if ((page === "groupbuy" && !state.groupbuy) || (page === "binding" && !state.binding)) {
+          await refresh();
+        }
+      }
+
+      $("refreshBtn").addEventListener("click", refresh);
+      $("searchInput").addEventListener("input", (event) => {
+        state.groupbuyQuery = event.target.value;
+        renderPendingDetail();
+      });
+      $("productSearchInput").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") $("applyGroupbuyFilterBtn").click();
+      });
+      $("applyGroupbuyFilterBtn").addEventListener("click", () => {
+        state.groupbuyFilters = {
+          keyword: $("productSearchInput").value.trim(),
+          beginDate: $("beginDateInput").value,
+          endDate: $("endDateInput").value
+        };
+        refresh();
+      });
+      document.querySelectorAll(".page-tab").forEach((button) => {
+        button.addEventListener("click", () => switchPage(button.dataset.page));
+      });
+      document.querySelectorAll(".tab").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.groupbuyTab = button.dataset.tab;
+          renderInnerTabs();
+        });
+      });
+
+      Object.assign(state.groupbuyFilters, currentMonthRange());
+      $("beginDateInput").value = state.groupbuyFilters.beginDate;
+      $("endDateInput").value = state.groupbuyFilters.endDate;
+      refresh();
+    </script>
+  </body>
+</html>
