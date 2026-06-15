@@ -979,22 +979,22 @@ function bindingTotal(payload) {
 
 function bindingAuthContext(session = {}) {
   const token =
-    session.token ||
-    session.accessToken ||
     env.BINDING_TOKEN ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "token");
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
+    session.token ||
+    session.accessToken;
   const sessionToken =
-    session.sessionToken ||
     env.BINDING_SESSION_TOKEN ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token");
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
+    session.sessionToken;
   const salonId =
-    session.salonId ||
     env.BINDING_SALON_ID ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "salon_id");
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "salon_id") ||
+    session.salonId;
   const brandId =
-    session.brandId ||
     env.BINDING_BRAND_ID ||
-    searchParamFromUrl(env.BINDING_DATA_URL || "", "brand_id");
+    searchParamFromUrl(env.BINDING_DATA_URL || "", "brand_id") ||
+    session.brandId;
   const zoneId =
     session.zoneId ||
     env.BINDING_ZONE_ID ||
@@ -1021,22 +1021,12 @@ function withBindingPage(urlText, page, pageSize, session = {}) {
 
 async function fetchBindingJson(url, session = {}) {
   const method = env.BINDING_DATA_METHOD || "GET";
-  const { token, zoneId } = bindingAuthContext(session);
-  const zone = String(zoneId || "1").replace(/^z/i, "");
   const response = await fetch(url, {
     method,
     headers: {
       accept: "application/json",
       origin: "https://sy-z1.meimeifa.com",
       referer: "https://sy-z1.meimeifa.com/",
-      ...(token
-        ? {
-            "mmf-token": token,
-            "mmf-zone": `z${zone}`,
-            zone: `z${zone}`,
-            "app-env": "prd"
-          }
-        : {}),
       ...(env.BINDING_DATA_BODY ? { "content-type": "application/json" } : {})
     },
     body: env.BINDING_DATA_BODY || undefined
