@@ -719,8 +719,8 @@ async function verifySalonAccount(account, password) {
     }
   );
   const login = parseJson(stdout, "门店系统登录返回不是 JSON。");
-  const token = loginValue(login, ["token", "access_token"]);
-  const sessionToken = loginValue(login, ["session_token", "sessionToken"]);
+  const token = loginValue(login, ["token", "access_token", "accessToken", "response.token"]);
+  const sessionToken = loginValue(login, ["session_token", "sessionToken", "response.session_token", "response.sessionToken"]);
   const message = String(login?.msg || login?.message || login?.error || "");
   if (!token && !sessionToken && /失败|错误|无效|密码|账号|error|invalid/i.test(message)) {
     throw new Error(message || "门店系统账号或密码校验失败。");
@@ -730,14 +730,31 @@ async function verifySalonAccount(account, password) {
     token,
     accessToken: token,
     sessionToken,
-    salonId: loginValue(login, ["salon_id", "salonId"]),
-    brandId: loginValue(login, ["brand_id", "brandId"])
+    salonId: loginValue(login, [
+      "salon_id",
+      "salonId",
+      "response.user.last_login_salon_id",
+      "response.staff.salon_id",
+      "response.salons.0.salon_id"
+    ]),
+    brandId: loginValue(login, [
+      "brand_id",
+      "brandId",
+      "response.user.brand_id",
+      "response.staff.brand_id",
+      "response.brands.0.brand_id"
+    ]),
+    zoneId: loginValue(login, ["zone_id", "zoneId", "response.zone_id", "response.zoneId"])
   };
 }
 
 function loginValue(login, names) {
   for (const name of names) {
-    const value = login?.[name] || login?.response?.[name] || login?.data?.[name];
+    const value =
+      getByPath(login, name) ||
+      login?.[name] ||
+      login?.response?.[name] ||
+      login?.data?.[name];
     if (value) return value;
   }
   return "";
