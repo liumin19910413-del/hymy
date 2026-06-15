@@ -20,6 +20,8 @@ const sessionCookieName = "hy_board_session";
 const sessionTtlMs = Number(env.BOARD_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
 const requestTimeoutMs = Number(env.UPSTREAM_TIMEOUT_MS || 25000);
 const sessions = new Map();
+const bindingMgTokenCache = { token: "", expiresAt: 0 };
+const bindingLiteTokenCache = { token: "", expiresAt: 0 };
 const defaultDataUrl =
   "https://api-sy-z1.meimeifa.com/salon/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
 
@@ -836,6 +838,46 @@ async function loginBySalonCli() {
   return parseJson(stdout, "salon-login 返回不是 JSON。");
 }
 
+async function loginByMgCli() {
+  if (!env.MG_CENTER_ACCOUNT || !env.MG_CENTER_PASSWORD) {
+    throw new AppError("缺少 MG_CENTER_ACCOUNT 或 MG_CENTER_PASSWORD，无法登录绑定数据源。", 500);
+  }
+  if (bindingMgTokenCache.token && bindingMgTokenCache.expiresAt > Date.now()) {
+    return bindingMgTokenCache.token;
+  }
+
+  const { stdout } = await execFileAsync(
+    "npx",
+    ["-y", "yz-mg-cli@latest", "login", "--field", "all"],
+    {
+      env: {
+        ...process.env,
+        MG_CENTER_BASE_URL: env.MG_CENTER_BASE_URL || "https://mg-cli.meimeifa.com"
+      },
+      timeout: 30000,
+      maxBuffer: 1024 * 1024 * 5
+    }
+  );
+  const login = parseJson(stdout, "MG CLI 登录返回不是 JSON。");
+  const tokenField = env.MG_LOGIN_TOKEN_FIELD || "token";
+  const token = loginValue(login, [
+    tokenField,
+    `data.${tokenField}`,
+    `response.${tokenField}`,
+    "token",
+    "data.token",
+    "response.token",
+    "access_token",
+    "data.access_token",
+    "response.access_token"
+  ]);
+  if (!token) throw new AppError(`MG CLI 登录成功，但未找到 ${tokenField}。`, 502);
+
+  bindingMgTokenCache.token = token;
+  bindingMgTokenCache.expiresAt = Date.now() + Number(env.BINDING_MG_TOKEN_TTL_MS || 10 * 60 * 1000);
+  return token;
+}
+
 async function fetchLiteJson(pathname, body) {
   const timeout = withTimeout({
     method: "POST",
@@ -902,6 +944,41 @@ async function loginByLiteBackend() {
     sessionToken: randomUUID(),
     source: "lite-login"
   };
+}
+
+async function loginByBindingLiteBackend() {
+  if (!env.MG_SALON_ACCOUNT || !env.MG_SALON_PASSWORD) {
+    throw new AppError("缺少 MG_SALON_ACCOUNT 或 MG_SALON_PASSWORD，无法登录绑定数据源。", 500);
+  }
+  if (bindingLiteTokenCache.token && bindingLiteTokenCache.expiresAt > Date.now()) {
+    return bindingLiteTokenCache.token;
+  }
+
+  const dataUrl = env.BINDING_DATA_URL || "";
+  const salonId = searchParamFromUrl(dataUrl, "salon_id") || env.BINDING_SALON_ID || "";
+  const brandId = searchParamFromUrl(dataUrl, "brand_id") || env.BINDING_BRAND_ID || "";
+  const login = await fetchLiteJson("/common/loginCenter", {
+    account: env.MG_SALON_ACCOUNT,
+    password: env.MG_SALON_PASSWORD
+  });
+  const loginToken = loginValue(login, ["response.token", "token"]);
+  if (!loginToken) throw new AppError("绑定数据源自动登录未返回 token。", 502);
+
+  let token = loginToken;
+  if (salonId && brandId) {
+    const toggled = await fetchLiteJson("/common/toggle", {
+      token: loginToken,
+      salon_id: salonId,
+      brand_id: brandId,
+      dest_salon_id: salonId,
+      dest_brand_id: brandId
+    });
+    token = loginValue(toggled, ["response.token", "token"]) || loginToken;
+  }
+
+  bindingLiteTokenCache.token = token;
+  bindingLiteTokenCache.expiresAt = Date.now() + Number(env.BINDING_LITE_TOKEN_TTL_MS || 10 * 60 * 1000);
+  return token;
 }
 
 async function verifySalonAccount(account, password) {
@@ -1219,6 +1296,19 @@ function bindingRows(payload) {
   return asArray(getByPath(payload, env.BINDING_LIST_PATH || "response.data"));
 }
 
+function validBindingStatusValues() {
+  return String(env.BINDING_VALID_STATUS_VALUES || "1")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isValidBindingRow(row) {
+  const statusField = env.BINDING_STATUS_FIELD || "status";
+  const status = getByPath(row, statusField);
+  return validBindingStatusValues().includes(String(status ?? "").trim().toLowerCase());
+}
+
 function hasPhone(row, phoneFields) {
   return phoneFields.some((field) => {
     const value = getByPath(row, field);
@@ -1261,7 +1351,8 @@ function bindingDateValue(row, preferredField) {
 }
 
 function buildBindingBoard(payload) {
-  const rows = bindingRows(payload);
+  const rawRows = bindingRows(payload);
+  const rows = rawRows.filter(isValidBindingRow);
   const phoneFields = String(env.BINDING_PHONE_FIELD || "phone,mobile,handset,tel")
     .split(",")
     .map((field) => field.trim())
@@ -1316,7 +1407,9 @@ function buildBindingBoard(payload) {
       name: partner.name,
       ...partner.today
     })),
-    sourceRows: rows.length
+    sourceRows: rows.length,
+    rawSourceRows: rawRows.length,
+    invalidSourceRows: Math.max(rawRows.length - rows.length, 0)
   };
 }
 
@@ -1368,29 +1461,50 @@ function bindingAuthContext(session = {}) {
   return { token, sessionToken, salonId, brandId, zoneId };
 }
 
-function withBindingPage(urlText, page, pageSize, session = {}) {
+function bindingAuthHeaders(token) {
+  const headers = {
+    accept: "application/json",
+    origin: "https://sy-z1.meimeifa.com",
+    referer: "https://sy-z1.meimeifa.com/"
+  };
+  if (!token) return headers;
+
+  const headerMode = env.BINDING_DATA_AUTH_HEADER || "authorization-bearer";
+  if (headerMode === "authorization-bearer") headers.authorization = `Bearer ${token}`;
+  if (headerMode === "mmf-token") headers["mmf-token"] = token;
+  if (headerMode === "token") headers.token = token;
+  return headers;
+}
+
+function withBindingPage(urlText, page, pageSize, session = {}, bindingToken = "") {
   const url = new URL(urlText);
   const { token, sessionToken, salonId, brandId, zoneId } = bindingAuthContext(session);
   url.searchParams.set(env.BINDING_PAGE_PARAM || "page", String(page));
   url.searchParams.set(env.BINDING_PAGE_SIZE_PARAM || "page_size", String(pageSize));
   if (!url.searchParams.get("search_type")) url.searchParams.set("search_type", env.BINDING_SEARCH_TYPE || "1");
   if (!url.searchParams.has("keyword")) url.searchParams.set("keyword", env.BINDING_KEYWORD || "");
-  if (token) url.searchParams.set("token", token);
-  if (sessionToken) url.searchParams.set("session_token", sessionToken);
+  if ((env.BINDING_DATA_LOGIN || "none") === "mg") {
+    url.searchParams.delete("token");
+    url.searchParams.delete("session_token");
+  } else if ((env.BINDING_DATA_LOGIN || "none") === "lite") {
+    url.searchParams.delete("session_token");
+    if (bindingToken) url.searchParams.set("token", bindingToken);
+  } else {
+    if (token) url.searchParams.set("token", token);
+    if (sessionToken) url.searchParams.set("session_token", sessionToken);
+  }
   if (salonId) url.searchParams.set("salon_id", salonId);
   if (brandId) url.searchParams.set("brand_id", brandId);
   if (zoneId) url.searchParams.set("zone_id", zoneId);
   return url.toString();
 }
 
-async function fetchBindingJson(url, session = {}) {
+async function fetchBindingJson(url, headers = bindingAuthHeaders()) {
   const method = env.BINDING_DATA_METHOD || "GET";
   const timeout = withTimeout({
     method,
     headers: {
-      accept: "application/json",
-      origin: "https://sy-z1.meimeifa.com",
-      referer: "https://sy-z1.meimeifa.com/",
+      ...headers,
       ...(env.BINDING_DATA_BODY ? { "content-type": "application/json" } : {})
     },
     body: env.BINDING_DATA_BODY || undefined
@@ -1425,14 +1539,40 @@ async function fetchBindingJson(url, session = {}) {
   }
 }
 
+async function fetchBindingJsonWithAuth(url, headers, retryAuth = true) {
+  try {
+    return await fetchBindingJson(url, headers);
+  } catch (error) {
+    if (
+      retryAuth &&
+      (env.BINDING_DATA_LOGIN || "none") === "mg" &&
+      (error.details?.upstreamCode || error.status === 401 || isAuthExpiredMessage(error.message))
+    ) {
+      bindingMgTokenCache.token = "";
+      bindingMgTokenCache.expiresAt = 0;
+      const token = await loginByMgCli();
+      return fetchBindingJson(url, bindingAuthHeaders(token));
+    }
+    throw error;
+  }
+}
+
 async function fetchBindingPayload(session = {}) {
   const defaultDataFile = "./data/binding-sample.json";
   if (env.BINDING_DATA_FILE || !env.BINDING_DATA_URL) {
     return JSON.parse(await readFile(path.resolve(projectRoot, env.BINDING_DATA_FILE || defaultDataFile), "utf8"));
   }
 
+  const loginMode = env.BINDING_DATA_LOGIN || "none";
+  const bindingToken =
+    loginMode === "mg" ? await loginByMgCli() : loginMode === "lite" ? await loginByBindingLiteBackend() : "";
+  const headers = loginMode === "mg" ? bindingAuthHeaders(bindingToken) : bindingAuthHeaders();
+
   if ((env.BINDING_PAGINATE || "false") !== "true") {
-    return fetchBindingJson(withBindingPage(env.BINDING_DATA_URL, 1, Number(env.BINDING_PAGE_SIZE || 100), session), session);
+    return fetchBindingJsonWithAuth(
+      withBindingPage(env.BINDING_DATA_URL, 1, Number(env.BINDING_PAGE_SIZE || 100), session, bindingToken),
+      headers
+    );
   }
 
   const pageSize = Number(env.BINDING_PAGE_SIZE || 100);
@@ -1441,7 +1581,10 @@ async function fetchBindingPayload(session = {}) {
   let total;
 
   for (let page = 1; page <= maxPage; page += 1) {
-    const payload = await fetchBindingJson(withBindingPage(env.BINDING_DATA_URL, page, pageSize, session), session);
+    const payload = await fetchBindingJsonWithAuth(
+      withBindingPage(env.BINDING_DATA_URL, page, pageSize, session, bindingToken),
+      headers
+    );
     const pageRows = bindingPayloadRows(payload);
     if (total === undefined) total = bindingTotal(payload);
     rows.push(...pageRows);

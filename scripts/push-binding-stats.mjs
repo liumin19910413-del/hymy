@@ -112,6 +112,19 @@ function bindingRows(payload) {
   return asArray(getByPath(payload, listPath));
 }
 
+function validBindingStatusValues() {
+  return String(env.BINDING_VALID_STATUS_VALUES || "1")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isValidBindingRow(row) {
+  const statusField = env.BINDING_STATUS_FIELD || "status";
+  const status = getByPath(row, statusField);
+  return validBindingStatusValues().includes(String(status ?? "").trim().toLowerCase());
+}
+
 function countRows(rows, phoneFields) {
   const phoneObtained = rows.filter((row) => hasPhone(row, phoneFields)).length;
   const totalBindings = rows.length;
@@ -128,7 +141,8 @@ function percent(value) {
 }
 
 function buildStats(payload) {
-  const rows = bindingRows(payload);
+  const rawRows = bindingRows(payload);
+  const rows = rawRows.filter(isValidBindingRow);
   const phoneFields = String(env.BINDING_PHONE_FIELD || "phone,mobile,handset,tel")
     .split(",")
     .map((field) => field.trim())
@@ -166,7 +180,10 @@ function buildStats(payload) {
     reportDate,
     cumulative: countRows(rows, phoneFields),
     store: countRows(todayRows, phoneFields),
-    topPartners
+    topPartners,
+    sourceRows: rows.length,
+    rawSourceRows: rawRows.length,
+    invalidSourceRows: Math.max(rawRows.length - rows.length, 0)
   };
 }
 
@@ -248,6 +265,70 @@ async function loginByMgCli() {
   return parseJson(stdout, "MG CLI 登录返回不是 JSON。");
 }
 
+async function fetchLiteJson(pathname, body) {
+  const timeout = withTimeout({
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/plain, */*",
+      origin: "https://sy-z1.meimeifa.com",
+      referer: "https://sy-z1.meimeifa.com/"
+    },
+    body: JSON.stringify({
+      ...body,
+      _yz_version: env.GROUPBUY_YZ_VERSION || "lite:4.73.3"
+    })
+  });
+  try {
+    const response = await fetch(`https://api-sy-z1.meimeifa.com${pathname}`, timeout.options);
+    const text = await response.text();
+    let payload;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+    if (!response.ok || (payload?.code && Number(payload.code) !== 1)) {
+      const message = payload?.msg || payload?.message || payload?.error || `HTTP ${response.status}`;
+      throw new Error(`绑定数据源自动登录失败：${message}`);
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`绑定数据源自动登录超时（${requestTimeoutMs}ms），请检查服务器出网或稍后重试。`);
+    }
+    throw error;
+  } finally {
+    timeout.done();
+  }
+}
+
+async function loginByBindingLiteBackend() {
+  if (!env.MG_SALON_ACCOUNT || !env.MG_SALON_PASSWORD) {
+    throw new Error("缺少 MG_SALON_ACCOUNT 或 MG_SALON_PASSWORD，无法登录绑定数据源。");
+  }
+
+  const dataUrl = env.BINDING_DATA_URL || "";
+  const salonId = new URL(dataUrl).searchParams.get("salon_id") || env.BINDING_SALON_ID || "";
+  const brandId = new URL(dataUrl).searchParams.get("brand_id") || env.BINDING_BRAND_ID || "";
+  const login = await fetchLiteJson("/common/loginCenter", {
+    account: env.MG_SALON_ACCOUNT,
+    password: env.MG_SALON_PASSWORD
+  });
+  const loginToken = getByPath(login, "response.token") || login.token;
+  if (!loginToken) throw new Error("绑定数据源自动登录未返回 token。");
+
+  if (!salonId || !brandId) return loginToken;
+  const toggled = await fetchLiteJson("/common/toggle", {
+    token: loginToken,
+    salon_id: salonId,
+    brand_id: brandId,
+    dest_salon_id: salonId,
+    dest_brand_id: brandId
+  });
+  return getByPath(toggled, "response.token") || toggled.token || loginToken;
+}
+
 function parseJson(text, message) {
   try {
     return JSON.parse(text);
@@ -278,10 +359,18 @@ function getRows(payload) {
   return asArray(getByPath(payload, env.BINDING_LIST_PATH || "data.list"));
 }
 
-function withPage(urlText, page, pageSize) {
+function withPage(urlText, page, pageSize, bindingToken = "") {
   const url = new URL(urlText);
   url.searchParams.set(env.BINDING_PAGE_PARAM || "page", String(page));
   url.searchParams.set(env.BINDING_PAGE_SIZE_PARAM || "page_size", String(pageSize));
+  if ((env.BINDING_DATA_LOGIN || "none") === "mg") {
+    url.searchParams.delete("token");
+    url.searchParams.delete("session_token");
+  }
+  if ((env.BINDING_DATA_LOGIN || "none") === "lite") {
+    url.searchParams.delete("session_token");
+    if (bindingToken) url.searchParams.set("token", bindingToken);
+  }
   return url.toString();
 }
 
@@ -297,10 +386,21 @@ async function fetchJson(url, headers) {
   });
   try {
     const response = await fetch(url, timeout.options);
-    if (!response.ok) {
-      throw new Error(`数据源请求失败：HTTP ${response.status}`);
+    const text = await response.text();
+    let payload;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
     }
-    return response.json();
+    if (!response.ok) {
+      throw new Error(`数据源请求失败：HTTP ${response.status} ${text.slice(0, 180)}`);
+    }
+    if (payload?.code && Number(payload.code) !== 1) {
+      const message = payload.msg || payload.message || payload.error || `code ${payload.code}`;
+      throw new Error(`数据源返回业务错误：${message}`);
+    }
+    return payload;
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error(`数据源请求超时（${requestTimeoutMs}ms），请检查服务器出网或稍后重试。`);
@@ -329,8 +429,11 @@ async function fetchHttpPayload() {
     if (headerMode === "token") headers.token = token;
   }
 
+  const bindingToken =
+    (env.BINDING_DATA_LOGIN || "none") === "lite" ? await loginByBindingLiteBackend() : "";
+
   if ((env.BINDING_PAGINATE || "false") !== "true") {
-    return fetchJson(env.BINDING_DATA_URL, headers);
+    return fetchJson(withPage(env.BINDING_DATA_URL, 1, Number(env.BINDING_PAGE_SIZE || 100), bindingToken), headers);
   }
 
   const pageSize = Number(env.BINDING_PAGE_SIZE || 100);
@@ -339,7 +442,7 @@ async function fetchHttpPayload() {
   let total;
 
   for (let page = 1; page <= maxPage; page += 1) {
-    const payload = await fetchJson(withPage(env.BINDING_DATA_URL, page, pageSize), headers);
+    const payload = await fetchJson(withPage(env.BINDING_DATA_URL, page, pageSize, bindingToken), headers);
     const pageRows = getRows(payload);
     if (total === undefined) total = getTotal(payload);
     rows.push(...pageRows);

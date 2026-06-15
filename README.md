@@ -78,6 +78,8 @@ MG_SYB_SENDER_IDS=好友ID1,好友ID2
 ```bash
 BINDING_DATA_FILE=./data/binding-sample.json
 BINDING_LIST_PATH=data.list
+BINDING_STATUS_FIELD=status
+BINDING_VALID_STATUS_VALUES=1
 BINDING_PHONE_FIELD=phone,mobile,handset,tel
 BINDING_DATE_FIELD=created_at
 PARTNER_NAME_FIELD=retail_store_name
@@ -91,9 +93,22 @@ TOP_PARTNER_LIMIT=20
 BINDING_DATA_FILE=
 BINDING_DATA_URL=https://example.com/api/bindings
 BINDING_DATA_METHOD=GET
+BINDING_DATA_LOGIN=lite
+MG_SALON_ACCOUNT=门店账号
+MG_SALON_PASSWORD=门店密码
+```
+
+`BINDING_DATA_LOGIN=lite` 会由服务端登录 lite 后台获取绑定接口认可的 `token`，并写入请求 query；不要把浏览器里过期的 `token` / `session_token` 固定在配置里当长期凭证使用。
+
+绑定统计默认只计入 `status=1` 的有效记录，`status=0` 会从累计、今日、昨日和合伙人 TOP 排名中排除。
+
+如果数据源明确要求 MG Center Bearer 鉴权，再改用：
+
+```bash
 BINDING_DATA_LOGIN=mg
 MG_CENTER_ACCOUNT=后台账号
 MG_CENTER_PASSWORD=后台密码
+BINDING_DATA_AUTH_HEADER=authorization-bearer
 ```
 
 如果接口直接返回汇总字段，可以改用：
