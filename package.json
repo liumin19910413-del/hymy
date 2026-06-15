@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node scripts/groupbuy-board-server.mjs",
     "push:binding": "node scripts/push-binding-stats.mjs",
     "push:binding:dry": "node scripts/push-binding-stats.mjs --dry-run",
     "push:binding:top10": "node scripts/push-binding-stats.mjs --top10-only",
     "push:binding:top10:dry": "node scripts/push-binding-stats.mjs --dry-run --top10-only",
-    "groupbuy:board": "node scripts/groupbuy-board-server.mjs"
+    "groupbuy:board": "node scripts/groupbuy-board-server.mjs",
+    "health": "node -e \"fetch('http://127.0.0.1:'+(process.env.GROUPBUY_BOARD_PORT||8787)+'/healthz').then(r=>r.text().then(t=>{console.log(t); if(!r.ok) process.exit(1)})).catch(e=>{console.error(e.message); process.exit(1)})\""
   },
   "engines": {
     "node": ">=18"

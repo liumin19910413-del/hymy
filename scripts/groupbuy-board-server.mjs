@@ -18,9 +18,21 @@ const port = Number(env.GROUPBUY_BOARD_PORT || 8787);
 const host = env.GROUPBUY_BOARD_HOST || "127.0.0.1";
 const sessionCookieName = "hy_board_session";
 const sessionTtlMs = Number(env.BOARD_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
+const requestTimeoutMs = Number(env.UPSTREAM_TIMEOUT_MS || 25000);
+const staleCacheTtlMs = Number(env.BOARD_STALE_CACHE_TTL_MINUTES || 12 * 60) * 60 * 1000;
 const sessions = new Map();
+const boardCache = new Map();
 const defaultDataUrl =
-  "https://api-sy-z1.meimeifa.com/brand/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
+  "https://api-sy-z1.meimeifa.com/salon/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
+
+class AppError extends Error {
+  constructor(message, status = 500, details = {}) {
+    super(message);
+    this.name = "AppError";
+    this.status = status;
+    this.details = details;
+  }
+}
 
 async function loadDotEnv(filePath) {
   try {
@@ -90,6 +102,50 @@ function parseNumber(value, fallback = 0) {
   if (value == null || value === "") return fallback;
   const number = Number(String(value).replace(/[^\d.-]/g, ""));
   return Number.isFinite(number) ? number : fallback;
+}
+
+function withTimeout(options = {}, timeoutMs = requestTimeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    options: {
+      ...options,
+      signal: controller.signal
+    },
+    done: () => clearTimeout(timeout)
+  };
+}
+
+function upstreamMessage(payload, fallback = "接口返回异常") {
+  return String(payload?.msg || payload?.message || payload?.error || fallback);
+}
+
+function isAuthExpiredMessage(text) {
+  return /session_token|token|登录|授权|过期|失效|invalid|unauthor/i.test(String(text || ""));
+}
+
+function cacheKey(name, input = {}) {
+  return `${name}:${JSON.stringify(input)}`;
+}
+
+function setCachedBoard(key, board) {
+  boardCache.set(key, {
+    board,
+    cachedAt: Date.now()
+  });
+}
+
+function cachedBoardOnFailure(key, error) {
+  const item = boardCache.get(key);
+  if (!item) return null;
+  if (Date.now() - item.cachedAt > staleCacheTtlMs) return null;
+  return {
+    ...item.board,
+    stale: true,
+    staleReason: error.message || String(error),
+    cachedAt: new Date(item.cachedAt).toISOString(),
+    cachedAtText: new Date(item.cachedAt).toLocaleString("zh-CN", { hour12: false })
+  };
 }
 
 function formatDateKey(value) {
@@ -775,16 +831,18 @@ function withPage(urlText, page, pageSize, login) {
   if ((env.GROUPBUY_DATA_LOGIN || "salon") === "salon") {
     const token =
       env.GROUPBUY_TOKEN ||
+      searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "token") ||
       searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
       loginValue(login, ["token", "access_token"]);
     const sessionToken =
       env.GROUPBUY_SESSION_TOKEN ||
       loginValue(login, ["session_token", "sessionToken"]) ||
+      searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "session_token") ||
       searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
       "";
-    if (!token) throw new Error("拼团接口缺少 token，请配置 GROUPBUY_TOKEN 或 BINDING_DATA_URL。");
+    if (!token) throw new AppError("拼团接口缺少 token，请配置 GROUPBUY_TOKEN 或 BINDING_DATA_URL。", 500);
     if (token) url.searchParams.set("token", token);
-    if (sessionToken && env.GROUPBUY_SESSION_TOKEN) url.searchParams.set("session_token", sessionToken);
+    if (sessionToken) url.searchParams.set("session_token", sessionToken);
     url.searchParams.set("_yz_version", env.GROUPBUY_YZ_VERSION || "lite:4.73.3");
   }
   return url.toString();
@@ -802,20 +860,45 @@ function withGroupbuyFilters(urlText, filters) {
   const endDate = groupbuyApiDateTime(filters.endDate, true);
   if (beginDate) url.searchParams.set("begin_date", beginDate);
   if (endDate) url.searchParams.set("end_date", endDate);
-  if (filters.keyword) url.searchParams.set("query", filters.keyword);
+  if ((env.GROUPBUY_PASS_KEYWORD_TO_UPSTREAM || "false") === "true" && filters.keyword) {
+    url.searchParams.set("query", filters.keyword);
+  }
   return url.toString();
 }
 
 async function fetchJson(url, headers) {
-  const response = await fetch(url, {
+  const timeout = withTimeout({
     method: env.GROUPBUY_DATA_METHOD || "GET",
     headers
   });
-  if (!response.ok) {
+  try {
+    const response = await fetch(url, timeout.options);
     const text = await response.text();
-    throw new Error(`拼团数据源请求失败：HTTP ${response.status} ${text.slice(0, 180)}`);
+    let payload;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+    if (!response.ok) {
+      throw new AppError(`拼团数据源请求失败：HTTP ${response.status} ${text.slice(0, 180)}`, 502);
+    }
+    if (payload?.code && Number(payload.code) !== 1) {
+      const message = upstreamMessage(payload, `code ${payload.code}`);
+      const hint = isAuthExpiredMessage(message)
+        ? "拼团接口授权可能已过期，请更新 GROUPBUY_SESSION_TOKEN 或重新登录后再试。"
+        : "拼团接口返回业务错误，请检查门店、品牌、日期范围和接口参数。";
+      throw new AppError(`${hint} 原始提示：${message}`, 502, { upstreamCode: payload.code });
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new AppError(`拼团数据源请求超时（${requestTimeoutMs}ms），请稍后重试或检查服务器出网。`, 504);
+    }
+    throw error;
+  } finally {
+    timeout.done();
   }
-  return response.json();
 }
 
 function getTotal(payload) {
@@ -1021,7 +1104,7 @@ function withBindingPage(urlText, page, pageSize, session = {}) {
 
 async function fetchBindingJson(url, session = {}) {
   const method = env.BINDING_DATA_METHOD || "GET";
-  const response = await fetch(url, {
+  const timeout = withTimeout({
     method,
     headers: {
       accept: "application/json",
@@ -1031,12 +1114,34 @@ async function fetchBindingJson(url, session = {}) {
     },
     body: env.BINDING_DATA_BODY || undefined
   });
-  if (!response.ok) throw new Error(`绑定数据源请求失败：HTTP ${response.status}`);
-  const payload = await response.json();
-  if (payload?.code && Number(payload.code) !== 1) {
-    throw new Error(`绑定数据源返回错误：${payload.msg || payload.message || `code ${payload.code}`}`);
+  try {
+    const response = await fetch(url, timeout.options);
+    const text = await response.text();
+    let payload;
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+    if (!response.ok) {
+      throw new AppError(`绑定数据源请求失败：HTTP ${response.status} ${text.slice(0, 180)}`, 502);
+    }
+    if (payload?.code && Number(payload.code) !== 1) {
+      const message = upstreamMessage(payload, `code ${payload.code}`);
+      const hint = isAuthExpiredMessage(message)
+        ? "绑定数据接口授权可能已过期，请重新登录或更新服务端 token。"
+        : "绑定数据接口返回业务错误，请检查门店、品牌和接口参数。";
+      throw new AppError(`${hint} 原始提示：${message}`, 502, { upstreamCode: payload.code });
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new AppError(`绑定数据源请求超时（${requestTimeoutMs}ms），请稍后重试或检查服务器出网。`, 504);
+    }
+    throw error;
+  } finally {
+    timeout.done();
   }
-  return payload;
 }
 
 async function fetchBindingPayload(session = {}) {
@@ -1311,6 +1416,16 @@ async function handleRequest(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
   try {
+    if (url.pathname === "/healthz") {
+      await jsonResponse(res, 200, {
+        ok: true,
+        uptimeSeconds: Math.round(process.uptime()),
+        cacheKeys: boardCache.size,
+        time: new Date().toISOString()
+      });
+      return;
+    }
+
     if (url.pathname === "/login") {
       if (currentSession(req)) {
         redirectResponse(res, "/groupbuy");
@@ -1368,31 +1483,59 @@ async function handleRequest(req, res) {
 
     if (url.pathname === "/api/groupbuy") {
       const filters = dateRangeFromSearch(url.searchParams);
-      const payload = await fetchPayload(filters, session);
-      const board = buildBoard(payload, filters);
-      await textResponse(res, 200, JSON.stringify(board), "application/json; charset=utf-8");
+      const key = cacheKey("groupbuy", filters);
+      try {
+        const payload = await fetchPayload(filters, session);
+        const board = buildBoard(payload, filters);
+        setCachedBoard(key, board);
+        await jsonResponse(res, 200, board);
+      } catch (error) {
+        const cached = cachedBoardOnFailure(key, error);
+        if (cached) {
+          await jsonResponse(res, 200, cached);
+          return;
+        }
+        throw error;
+      }
       return;
     }
 
     if (url.pathname === "/api/binding") {
-      const payload = await fetchBindingPayload(session);
-      const board = buildBindingBoard(payload);
-      await textResponse(res, 200, JSON.stringify(board), "application/json; charset=utf-8");
+      const key = cacheKey("binding", { reportDate: env.REPORT_DATE || todayKey() });
+      try {
+        const payload = await fetchBindingPayload(session);
+        const board = buildBindingBoard(payload);
+        setCachedBoard(key, board);
+        await jsonResponse(res, 200, board);
+      } catch (error) {
+        const cached = cachedBoardOnFailure(key, error);
+        if (cached) {
+          await jsonResponse(res, 200, cached);
+          return;
+        }
+        throw error;
+      }
       return;
     }
 
     await textResponse(res, 404, "Not found");
   } catch (error) {
-    await textResponse(
-      res,
-      500,
-      JSON.stringify({ error: error.message || String(error) }),
-      "application/json; charset=utf-8"
-    );
+    const status = error.status || 500;
+    console.error(`[${new Date().toISOString()}] ${req.method} ${url.pathname} failed:`, error.message || error);
+    await jsonResponse(res, status, {
+      error: error.message || String(error),
+      status,
+      retryable: status >= 500
+    });
   }
 }
 
-createServer(handleRequest).listen(port, host, () => {
+const server = createServer(handleRequest);
+server.on("error", (error) => {
+  console.error(`服务启动失败：${error.message || error}`);
+  process.exitCode = 1;
+});
+server.listen(port, host, () => {
   const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
   console.log(`拼团数据看板已启动：http://${displayHost}:${port}/groupbuy`);
 });

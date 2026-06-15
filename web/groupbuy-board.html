@@ -546,6 +546,17 @@
         color: #b42318;
       }
 
+      .notice {
+        margin-bottom: 14px;
+        padding: 12px 14px;
+        border: 1px solid #f3d19a;
+        border-radius: 8px;
+        background: #fff8eb;
+        color: #8a4b0f;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
       .loading-state {
         display: grid;
         place-items: center;
@@ -720,6 +731,7 @@
             </div>
 
             <div class="metrics" id="groupbuyMetrics"></div>
+            <div id="groupbuyNotice"></div>
 
             <section>
               <div class="board-shell">
@@ -810,6 +822,7 @@
 
           <div class="page" id="page-binding">
             <div class="metrics" id="bindingMetrics"></div>
+            <div id="bindingNotice"></div>
 
             <section>
               <div class="section-head">
@@ -842,6 +855,14 @@
       const $ = (id) => document.getElementById(id);
       const money = (value) => `¥${Number(value || 0).toFixed(2)}`;
       const pct = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
+      const escapeHtml = (value) =>
+        String(value || "").replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        })[char]);
       const dateKey = (date) =>
         [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
 
@@ -1052,6 +1073,9 @@
           $("beginDateInput").value = state.groupbuyFilters.beginDate;
           $("endDateInput").value = state.groupbuyFilters.endDate;
         }
+        $("groupbuyNotice").innerHTML = board.stale
+          ? `<div class="notice">当前展示的是上次成功缓存数据（缓存时间：${escapeHtml(board.cachedAtText || "未知")}）。实时接口读取失败：${escapeHtml(board.staleReason || "未知错误")}</div>`
+          : "";
         renderGroupbuyMetrics(board);
         renderSpuGroups(board);
         renderPendingTop(board);
@@ -1062,6 +1086,9 @@
 
       function renderBinding(board) {
         state.binding = board;
+        $("bindingNotice").innerHTML = board.stale
+          ? `<div class="notice">当前展示的是上次成功缓存数据（缓存时间：${escapeHtml(board.cachedAtText || "未知")}）。实时接口读取失败：${escapeHtml(board.staleReason || "未知错误")}</div>`
+          : "";
         renderBindingMetrics(board);
         renderBindingTop(board);
       }
@@ -1092,7 +1119,16 @@
 
       async function fetchJson(path) {
         const response = await fetch(path, { cache: "no-store" });
-        const data = await response.json();
+        if (response.status === 401) {
+          location.href = "/login";
+          throw new Error("登录已过期，请重新登录。");
+        }
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          throw new Error("服务返回内容异常，请检查 Node 服务是否仍在运行。");
+        }
         if (!response.ok) throw new Error(data.error || "读取失败");
         return data;
       }

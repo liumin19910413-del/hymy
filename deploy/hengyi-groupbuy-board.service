@@ -1,0 +1,21 @@
+[Unit]
+Description=Hengyi Meiyuan groupbuy data board
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hengyi-meiyuan-data
+EnvironmentFile=/opt/hengyi-meiyuan-data/.env
+Environment=NODE_ENV=production
+Environment=GROUPBUY_BOARD_HOST=127.0.0.1
+Environment=GROUPBUY_BOARD_PORT=8787
+ExecStart=/usr/bin/node /opt/hengyi-meiyuan-data/scripts/groupbuy-board-server.mjs
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+StandardOutput=append:/var/log/hengyi-groupbuy-board.log
+StandardError=append:/var/log/hengyi-groupbuy-board.error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -179,6 +179,12 @@ rm ~/Library/LaunchAgents/com.local.hengyi-meiyuan.binding-push.plist
 npm run groupbuy:board
 ```
 
+健康检查：
+
+```bash
+npm run health
+```
+
 打开：
 
 ```text
@@ -254,3 +260,73 @@ http://服务器IP或域名:8787/groupbuy
 ```
 
 如果 `session_token` 过期，页面会提示需要更新 `GROUPBUY_SESSION_TOKEN`。重新从浏览器 Network 复制最新拼团接口 curl 里的 `session_token`，更新服务器环境变量后重启服务即可。
+
+### 稳定性策略
+
+为了避免客户使用时遇到“早上有数据，下午突然空白”，服务端做了几件保护：
+
+- 上游接口请求默认 25 秒超时，可用 `UPSTREAM_TIMEOUT_MS` 调整
+- 拼团和绑定接口最近一次成功结果会缓存在内存中
+- 如果上游接口临时失败或 `session_token` 过期，页面会展示最近一次成功缓存，并明确提示“当前为缓存数据”
+- `/healthz` 可用于 Nginx、systemd 或人工巡检确认 Node 服务还活着
+- 接口业务错误会区分授权过期、上游错误、请求超时，不再只显示泛泛的 500
+
+建议生产环境配置：
+
+```bash
+BOARD_SESSION_TTL_HOURS=12
+UPSTREAM_TIMEOUT_MS=25000
+BOARD_STALE_CACHE_TTL_MINUTES=720
+GROUPBUY_BOARD_HOST=127.0.0.1
+GROUPBUY_BOARD_PORT=8787
+```
+
+如果页面提示 `GROUPBUY_SESSION_TOKEN` 可能过期：
+
+1. 用门店后台浏览器重新打开拼团订单接口
+2. 从 Network 的请求 URL 里复制最新 `session_token`
+3. 更新服务器 `/opt/hengyi-meiyuan-data/.env`
+4. 重启服务：
+
+```bash
+sudo systemctl restart hengyi-groupbuy-board
+```
+
+### 阿里云 ECS 部署建议
+
+推荐部署形态：
+
+```text
+用户浏览器 -> Nginx 80/443 -> Node 127.0.0.1:8787
+```
+
+项目内已提供两个模板：
+
+- `deploy/hengyi-groupbuy-board.service`：systemd 服务，负责开机自启、异常重启、写日志
+- `deploy/nginx-hengyi-groupbuy-board.conf`：Nginx 反向代理配置
+
+服务器目录示例：
+
+```bash
+sudo mkdir -p /opt/hengyi-meiyuan-data
+sudo cp -R . /opt/hengyi-meiyuan-data
+sudo cp deploy/hengyi-groupbuy-board.service /etc/systemd/system/hengyi-groupbuy-board.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now hengyi-groupbuy-board
+sudo systemctl status hengyi-groupbuy-board
+```
+
+查看服务日志：
+
+```bash
+sudo journalctl -u hengyi-groupbuy-board -f
+sudo tail -f /var/log/hengyi-groupbuy-board.log
+sudo tail -f /var/log/hengyi-groupbuy-board.error.log
+```
+
+部署 Nginx 后检查：
+
+```bash
+curl http://127.0.0.1:8787/healthz
+curl http://服务器IP/healthz
+```

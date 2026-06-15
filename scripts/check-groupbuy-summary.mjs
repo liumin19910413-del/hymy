@@ -13,8 +13,25 @@ const dataUrl =
   env.GROUPBUY_DATA_URL ||
   "https://api-sy-z1.meimeifa.com/salon/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
 
-if (!env.GROUPBUY_TOKEN || !env.GROUPBUY_SESSION_TOKEN) {
+const groupbuyToken =
+  env.GROUPBUY_TOKEN ||
+  searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "token") ||
+  searchParamFromUrl(env.BINDING_DATA_URL || "", "token");
+const groupbuySessionToken =
+  env.GROUPBUY_SESSION_TOKEN ||
+  searchParamFromUrl(env.GROUPBUY_DATA_URL || "", "session_token") ||
+  searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token");
+
+if (!groupbuyToken || !groupbuySessionToken) {
   throw new Error("缺少 GROUPBUY_TOKEN 或 GROUPBUY_SESSION_TOKEN。");
+}
+
+function searchParamFromUrl(urlText, name) {
+  try {
+    return new URL(urlText).searchParams.get(name) || "";
+  } catch {
+    return "";
+  }
 }
 
 function dateKey(value) {
@@ -100,8 +117,8 @@ async function fetchRows(orderStatus) {
     url.searchParams.set("order_status", orderStatus);
     url.searchParams.set("page", String(page));
     url.searchParams.set("page_size", String(pageSize));
-    url.searchParams.set("token", env.GROUPBUY_TOKEN);
-    url.searchParams.set("session_token", env.GROUPBUY_SESSION_TOKEN);
+    url.searchParams.set("token", groupbuyToken);
+    url.searchParams.set("session_token", groupbuySessionToken);
 
     const response = await fetch(url, {
       headers: {
