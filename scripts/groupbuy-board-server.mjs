@@ -20,7 +20,7 @@ const sessionCookieName = "hy_board_session";
 const sessionTtlMs = Number(env.BOARD_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
 const sessions = new Map();
 const defaultDataUrl =
-  "https://api-sy-z1.meimeifa.com/salon/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
+  "https://api-sy-z1.meimeifa.com/brand/order/mall/groupbuy/get?page=1&page_size=100&begin_date=&end_date=&order_status=&order_by=order&salon_id=18695&query_type=1&query=&brand_id=1637";
 
 async function loadDotEnv(filePath) {
   try {
@@ -758,18 +758,17 @@ function withPage(urlText, page, pageSize, login) {
   if ((env.GROUPBUY_DATA_LOGIN || "salon") === "salon") {
     const token =
       env.GROUPBUY_TOKEN ||
-      loginValue(login, ["token", "access_token"]) ||
-      searchParamFromUrl(env.BINDING_DATA_URL || "", "token");
+      searchParamFromUrl(env.BINDING_DATA_URL || "", "token") ||
+      loginValue(login, ["token", "access_token"]);
     const sessionToken =
       env.GROUPBUY_SESSION_TOKEN ||
       loginValue(login, ["session_token", "sessionToken"]) ||
       searchParamFromUrl(env.BINDING_DATA_URL || "", "session_token") ||
       "";
-    if (!sessionToken) {
-      throw new Error("拼团接口缺少 GROUPBUY_SESSION_TOKEN。门店账号沿用绑定推送配置，只需从浏览器 Network 复制最新拼团接口 curl 后补这个 session_token。");
-    }
+    if (!token) throw new Error("拼团接口缺少 token，请配置 GROUPBUY_TOKEN 或 BINDING_DATA_URL。");
     if (token) url.searchParams.set("token", token);
-    url.searchParams.set("session_token", sessionToken);
+    if (sessionToken && env.GROUPBUY_SESSION_TOKEN) url.searchParams.set("session_token", sessionToken);
+    url.searchParams.set("_yz_version", env.GROUPBUY_YZ_VERSION || "lite:4.73.3");
   }
   return url.toString();
 }
