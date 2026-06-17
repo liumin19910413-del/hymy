@@ -291,6 +291,11 @@
         box-shadow: var(--shadow-soft);
       }
 
+      .binding-filters {
+        grid-template-columns: 150px 150px auto;
+        justify-content: start;
+      }
+
       .field label {
         display: block;
         margin-bottom: 6px;
@@ -462,6 +467,14 @@
         padding: 14px 18px;
         border-bottom: 1px solid var(--line);
         background: linear-gradient(180deg, #fff, #fbfcfe);
+      }
+
+      .section-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
       }
 
       h2 {
@@ -733,6 +746,107 @@
         background: #f3f6f8;
       }
 
+      .link-button {
+        width: auto;
+        height: auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--brand-strong);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 800;
+      }
+
+      .link-button:hover {
+        text-decoration: underline;
+      }
+
+      .detail-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: none;
+        background: rgba(17, 24, 22, 0.34);
+      }
+
+      .detail-overlay.active {
+        display: block;
+      }
+
+      .detail-drawer {
+        position: absolute;
+        top: 0;
+        right: 0;
+        display: flex;
+        flex-direction: column;
+        width: 60vw;
+        height: 100%;
+        background: #fff;
+        box-shadow: -18px 0 44px rgba(17, 24, 22, 0.18);
+      }
+
+      .detail-head {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 16px;
+        align-items: start;
+        padding: 20px 22px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .detail-head h2 {
+        font-size: 20px;
+      }
+
+      .detail-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .detail-summary span {
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #f8faf9;
+      }
+
+      .icon-button {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 22px;
+        line-height: 1;
+      }
+
+      .detail-tools {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        padding: 12px 22px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+      }
+
+      .detail-body {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .detail-body table {
+        min-width: 780px;
+      }
+
       .loading-state {
         display: grid;
         place-items: center;
@@ -830,6 +944,10 @@
           width: auto;
           text-align: center;
         }
+
+        .detail-drawer {
+          width: 100vw;
+        }
       }
 
       @media (max-width: 640px) {
@@ -856,6 +974,10 @@
 
         .table-scroll {
           overflow-x: auto;
+        }
+
+        .detail-tools {
+          grid-template-columns: 1fr;
         }
       }
 
@@ -921,8 +1043,9 @@
               <div class="board-shell">
                 <div class="tabs" role="tablist" aria-label="拼团榜单切换">
                   <button class="tab active" type="button" data-tab="spu">拼团汇总</button>
-                  <button class="tab" type="button" data-tab="success">已成团</button>
                   <button class="tab" type="button" data-tab="detail">未成团</button>
+                  <button class="tab" type="button" data-tab="success">已成团</button>
+                  <button class="tab" type="button" data-tab="ranking">团长排行</button>
                 </div>
 
                 <div>
@@ -951,18 +1074,6 @@
                     </div>
                   </div>
 
-                  <div class="tab-panel" id="panel-success">
-                    <div class="section-head">
-                      <div>
-                        <h2>已成团列表</h2>
-                        <div class="hint" id="successHint">显示当前范围内已成团团长</div>
-                      </div>
-                      <button class="ghost-button" id="exportSuccessBtn" type="button">导出 Excel</button>
-                    </div>
-                    <div class="leader-list" id="successList"></div>
-                    <div class="pager" id="successPager"></div>
-                  </div>
-
                   <div class="tab-panel" id="panel-detail">
                     <div class="section-head">
                       <div>
@@ -977,12 +1088,68 @@
                     <div class="leader-list" id="detailRows"></div>
                     <div class="pager" id="detailPager"></div>
                   </div>
+
+                  <div class="tab-panel" id="panel-success">
+                    <div class="section-head">
+                      <div>
+                        <h2>已成团列表</h2>
+                        <div class="hint" id="successHint">显示当前范围内已成团团长</div>
+                      </div>
+                      <button class="ghost-button" id="exportSuccessBtn" type="button">导出 Excel</button>
+                    </div>
+                    <div class="leader-list" id="successList"></div>
+                    <div class="pager" id="successPager"></div>
+                  </div>
+
+                  <div class="tab-panel" id="panel-ranking">
+                    <div class="section-head">
+                      <div>
+                        <h2>团长订单排行榜</h2>
+                        <div class="hint" id="rankingHint">按团长手机号合并统计有效订单</div>
+                      </div>
+                      <div class="section-actions">
+                        <button class="ghost-button" id="exportRankingDetailBtn" type="button">导出客户明细</button>
+                        <button class="ghost-button" id="exportRankingBtn" type="button">导出 Excel</button>
+                      </div>
+                    </div>
+                    <div class="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th style="width: 72px">排名</th>
+                            <th>团长</th>
+                            <th style="width: 132px">手机号</th>
+                            <th style="width: 104px">有效订单数</th>
+                            <th style="width: 112px">有效金额</th>
+                            <th style="width: 92px">开团数</th>
+                            <th style="width: 92px">已成团数</th>
+                            <th style="width: 92px">未成团数</th>
+                            <th style="width: 150px">最近出单时间</th>
+                          </tr>
+                        </thead>
+                        <tbody id="rankingRows"></tbody>
+                      </table>
+                    </div>
+                    <div class="pager" id="rankingPager"></div>
+                  </div>
                 </div>
               </div>
             </section>
           </div>
 
           <div class="page" id="page-binding">
+            <div class="filters binding-filters" aria-label="绑定数据筛选">
+              <div class="field">
+                <label for="bindingBeginDateInput">开始日期</label>
+                <input id="bindingBeginDateInput" type="date" />
+              </div>
+              <div class="field">
+                <label for="bindingEndDateInput">结束日期</label>
+                <input id="bindingEndDateInput" type="date" />
+              </div>
+              <button class="primary" id="applyBindingFilterBtn" type="button">查询</button>
+            </div>
+
             <div class="metrics" id="bindingMetrics"></div>
             <div id="bindingNotice"></div>
 
@@ -990,11 +1157,11 @@
               <div class="section-head">
                 <div>
                   <h2>合伙人绑定数据</h2>
-                  <div class="hint" id="bindingHint">默认按今日绑定总数降序，每页 20 条</div>
+                  <div class="hint" id="bindingHint">默认按区间绑定总数降序，每页 20 条</div>
                 </div>
                 <div class="segmented" aria-label="绑定数据排序">
-                  <button class="active" type="button" data-binding-sort="today">今日</button>
                   <button type="button" data-binding-sort="yesterday">昨日</button>
+                  <button class="active" type="button" data-binding-sort="range">区间</button>
                   <button type="button" data-binding-sort="cumulative">累计</button>
                 </div>
               </div>
@@ -1006,7 +1173,7 @@
                       <th>合伙人</th>
                       <th style="width: 210px">累计</th>
                       <th style="width: 210px">昨日</th>
-                      <th style="width: 210px">今日</th>
+                      <th style="width: 210px" id="bindingRangeHead">区间</th>
                     </tr>
                   </thead>
                   <tbody id="bindingRows"></tbody>
@@ -1016,6 +1183,39 @@
             </section>
           </div>
         </main>
+      </div>
+    </div>
+
+    <div class="detail-overlay" id="orderDetailOverlay" aria-hidden="true">
+      <div class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="orderDetailTitle">
+        <div class="detail-head">
+          <div>
+            <h2 id="orderDetailTitle">客户明细</h2>
+            <div class="hint" id="orderDetailSubtitle">查看有效订单对应的购买客户</div>
+            <div class="detail-summary" id="orderDetailSummary"></div>
+          </div>
+          <button class="icon-button" id="closeOrderDetailBtn" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="detail-tools">
+          <input id="orderDetailSearchInput" placeholder="搜索客户 / 手机号 / 商品" />
+          <button class="ghost-button" id="exportOrderDetailBtn" type="button">导出 Excel</button>
+        </div>
+        <div class="detail-body">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 64px">序号</th>
+                <th style="width: 130px">客户</th>
+                <th style="width: 132px">手机号</th>
+                <th style="width: 160px">支付时间</th>
+                <th style="width: 108px">支付金额</th>
+                <th style="width: 260px">拼团商品</th>
+                <th style="width: 120px">团长</th>
+              </tr>
+            </thead>
+            <tbody id="orderDetailRows"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -1033,12 +1233,24 @@
         groupbuyTab: "spu",
         successPage: 1,
         pendingPage: 1,
+        rankingPage: 1,
         bindingPage: 1,
-        bindingSort: "today",
+        bindingSort: "range",
+        bindingFilters: {
+          beginDate: "",
+          endDate: ""
+        },
+        orderDetail: {
+          title: "",
+          subtitle: "",
+          rows: [],
+          query: ""
+        },
         pageSize: 20
       };
 
       const $ = (id) => document.getElementById(id);
+      const maxQueryRangeDays = 61;
       const money = (value) => `¥${Number(value || 0).toFixed(2)}`;
       const pct = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
       const escapeHtml = (value) =>
@@ -1062,6 +1274,20 @@
         joinedCount: "参团单数",
         paidOrders: "有效订单数",
         amount: "有效金额",
+        totalGroups: "开团数",
+        successGroups: "已成团数",
+        pendingGroups: "未成团数",
+        latestOrderAt: "最近出单时间",
+        successRate: "成团率",
+        orderDetails: "客户明细",
+        orderId: "订单ID",
+        customerName: "客户姓名",
+        customerPhone: "客户手机号",
+        customerPhoneMasked: "客户手机号脱敏",
+        payTime: "支付时间",
+        groupStatus: "拼团状态",
+        orderStatus: "订单状态",
+        isOpenGroupOrder: "是否开团订单",
         remaining: "还差单数",
         isSuccess: "是否已成团",
         rawStatus: "原始状态"
@@ -1073,6 +1299,36 @@
           beginDate: dateKey(new Date(now.getFullYear(), now.getMonth(), 1)),
           endDate: dateKey(now)
         };
+      }
+
+      function todayRange() {
+        const today = dateKey(new Date());
+        return {
+          beginDate: today,
+          endDate: today
+        };
+      }
+
+      function dateValue(dateText) {
+        const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) return 0;
+        return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      }
+
+      function queryRangeDays(beginDate, endDate) {
+        const begin = dateValue(beginDate);
+        const end = dateValue(endDate);
+        if (!begin || !end) return 0;
+        return Math.floor((Math.abs(end - begin)) / 86400000) + 1;
+      }
+
+      function validateQueryRange(beginDate, endDate) {
+        const days = queryRangeDays(beginDate, endDate);
+        if (days > maxQueryRangeDays) {
+          window.alert(`查询时间跨度最多只能 ${maxQueryRangeDays} 天，请缩小日期范围。`);
+          return false;
+        }
+        return true;
       }
 
       function metric(label, value) {
@@ -1149,17 +1405,20 @@
         $("spuHint").textContent = "正在读取拼团订单并按商品汇总";
         $("successHint").textContent = "正在读取当前范围内已成团团长";
         $("detailHint").textContent = "正在读取未成团";
+        $("rankingHint").textContent = "正在按团长手机号统计有效订单";
         $("spuRows").innerHTML = `<tr><td colspan="7">${loadingState()}</td></tr>`;
         $("successList").innerHTML = loadingState("已成团列表加载中", "正在统计当前范围内成团记录");
         $("successPager").innerHTML = "";
         $("detailRows").innerHTML = loadingState("未成团加载中", "正在整理团长、手机号和商品标题");
         $("detailPager").innerHTML = "";
+        $("rankingRows").innerHTML = `<tr><td colspan="9">${loadingState("团长排行加载中", "正在按手机号合并团长订单")}</td></tr>`;
+        $("rankingPager").innerHTML = "";
       }
 
       function renderBindingLoading() {
         $("bindingMetrics").innerHTML = Array.from({ length: 3 }, loadingMetric).join("");
         $("bindingHint").textContent = "正在读取合伙人绑定数据";
-        $("bindingRows").innerHTML = `<tr><td colspan="5">${loadingState("绑定数据加载中", "正在按合伙人汇总累计、昨日和今日数据")}</td></tr>`;
+        $("bindingRows").innerHTML = `<tr><td colspan="5">${loadingState("绑定数据加载中", "正在按合伙人汇总累计、昨日和区间数据")}</td></tr>`;
         $("bindingPager").innerHTML = "";
       }
 
@@ -1175,10 +1434,11 @@
       }
 
       function renderBindingMetrics(board) {
+        const rangeText = bindingRangeText(board);
         $("bindingMetrics").innerHTML = [
           metricGroup("累计", board.cumulative),
           metricGroup("昨日", board.yesterday),
-          metricGroup("今日", board.today)
+          metricGroup(rangeText, board.range)
         ].join("");
       }
 
@@ -1205,6 +1465,16 @@
             `
           )
           .join("");
+      }
+
+      function detailButton(item, label) {
+        const id = escapeHtml(item.groupId || "");
+        return `<button class="link-button" type="button" data-detail-scope="group" data-detail-key="${id}">${escapeHtml(label)}</button>`;
+      }
+
+      function rankingDetailButton(item, label) {
+        const key = escapeHtml(item.leaderPhone || item.leaderPhoneMasked || item.leaderName || "");
+        return `<button class="link-button" type="button" data-detail-scope="leader" data-detail-key="${key}">${escapeHtml(label)}</button>`;
       }
 
       function leaderRow(item, index, rightHtml, metaHtml) {
@@ -1234,8 +1504,8 @@
             leaderRow(
               item,
               (state.successPage - 1) * state.pageSize + index,
-              `已成团<span>${item.title || "拼团商品"}</span>`,
-              `${item.leaderPhoneMasked} ｜ 有效 ${item.paidOrders} 单 ｜ ${money(item.amount)}`
+              `已成团<span>${escapeHtml(item.title || "拼团商品")}</span>`,
+              `${escapeHtml(item.leaderPhoneMasked)} ｜ ${detailButton(item, `有效 ${item.paidOrders} 单`)} ｜ ${money(item.amount)}`
             )
           )
           .join("");
@@ -1266,9 +1536,38 @@
               item,
               (state.pendingPage - 1) * state.pageSize + index,
               `${item.remaining} 单<span>还差</span>`,
-              `${escapeHtml(item.leaderPhoneMasked)} ｜ 有效 ${item.paidOrders} 单 ｜ ${money(item.amount)} ｜ ${escapeHtml(item.createdAt || "未知")} ｜ ${escapeHtml(item.title || "未命名活动")}`
+              `${escapeHtml(item.leaderPhoneMasked)} ｜ ${detailButton(item, `有效 ${item.paidOrders} 单`)} ｜ ${money(item.amount)} ｜ ${escapeHtml(item.createdAt || "未知")} ｜ ${escapeHtml(item.title || "未命名活动")}`
             )
           )
+          .join("");
+      }
+
+      function renderLeaderRankings(board) {
+        const rows = board.leaderRankings || [];
+        state.rankingPage = renderPager("rankingPager", rows, state.rankingPage, "ranking");
+        const visibleRows = pageRows(rows, state.rankingPage);
+        $("rankingHint").textContent = `当前共 ${rows.length} 位团长，按有效订单数降序，每页 20 条`;
+        if (rows.length === 0) {
+          $("rankingRows").innerHTML = '<tr><td colspan="9"><div class="empty">当前范围暂无团长排行数据</div></td></tr>';
+          return;
+        }
+        $("rankingRows").innerHTML = visibleRows
+          .map((item, index) => {
+            const rank = (state.rankingPage - 1) * state.pageSize + index + 1;
+            return `
+              <tr>
+                <td>${rank}</td>
+                <td>${escapeHtml(item.leaderName || "未命名团长")}</td>
+                <td>${escapeHtml(item.leaderPhoneMasked || "未知")}</td>
+                <td>${rankingDetailButton(item, `${Number(item.paidOrders || 0)} 单`)}</td>
+                <td>${money(item.amount)}</td>
+                <td>${Number(item.totalGroups || 0)}</td>
+                <td>${Number(item.successGroups || 0)}</td>
+                <td>${Number(item.pendingGroups || 0)}</td>
+                <td>${escapeHtml(item.latestOrderAt || "未知")}</td>
+              </tr>
+            `;
+          })
           .join("");
       }
 
@@ -1351,6 +1650,30 @@
         URL.revokeObjectURL(link.href);
       }
 
+      function stripOrderDetails(rows) {
+        return rows.map(({ orderDetails, ...row }) => row);
+      }
+
+      function leaderCustomerDetailRows() {
+        const rows = state.groupbuy?.leaderRankings || [];
+        return rows.flatMap((leader, leaderIndex) =>
+          (leader.orderDetails || []).map((detail, detailIndex) => ({
+            团长排名: leaderIndex + 1,
+            团长: detail.leaderName || leader.leaderName || "",
+            团长手机号: detail.leaderPhone || leader.leaderPhone || detail.leaderPhoneMasked || leader.leaderPhoneMasked || "",
+            购买客户: detail.customerName || "",
+            客户手机号: detail.customerPhone || detail.customerPhoneMasked || "",
+            是否开团订单: Boolean(detail.isOpenGroupOrder),
+            支付时间: detail.payTime || "",
+            订单金额: Number(detail.amount || 0),
+            拼团商品: detail.title || "",
+            成团状态: detail.groupStatus || "",
+            订单号: detail.orderId || "",
+            明细序号: detailIndex + 1
+          }))
+        );
+      }
+
       function exportGroupbuyRows(type) {
         const board = state.groupbuy;
         if (!board) {
@@ -1358,26 +1681,137 @@
           return;
         }
         if (type === "success") {
-          downloadExcel("恒奕美源拼团", "已成团", board.succeeded || []);
+          downloadExcel("恒奕美源拼团", "已成团", stripOrderDetails(board.succeeded || []));
           return;
         }
-        downloadExcel("恒奕美源拼团", "未成团", filteredPendingRows());
+        if (type === "ranking") {
+          downloadExcel("恒奕美源拼团", "团长排行", stripOrderDetails(board.leaderRankings || []));
+          return;
+        }
+        if (type === "rankingDetails") {
+          downloadExcel("恒奕美源拼团", "团长客户明细", leaderCustomerDetailRows());
+          return;
+        }
+        downloadExcel("恒奕美源拼团", "未成团", stripOrderDetails(filteredPendingRows()));
+      }
+
+      function allGroupRows() {
+        const board = state.groupbuy;
+        return board?.all || [...(board?.pending || []), ...(board?.succeeded || [])];
+      }
+
+      function findGroup(groupId) {
+        return allGroupRows().find((item) => String(item.groupId) === String(groupId));
+      }
+
+      function findLeaderRanking(key) {
+        const rows = state.groupbuy?.leaderRankings || [];
+        return rows.find((item) =>
+          [item.leaderPhone, item.leaderPhoneMasked, item.leaderName].some((value) => String(value || "") === String(key))
+        );
+      }
+
+      function openOrderDetails(scope, key) {
+        const source = scope === "leader" ? findLeaderRanking(key) : findGroup(key);
+        if (!source) {
+          window.alert("没有找到对应的订单明细。");
+          return;
+        }
+        const rows = [...(source.orderDetails || [])].sort((a, b) => dateValueFromText(b.payTime) - dateValueFromText(a.payTime));
+        state.orderDetail = {
+          title: scope === "leader" ? `${source.leaderName || "未命名团长"}的客户明细` : `${source.title || "拼团"}客户明细`,
+          subtitle:
+            scope === "leader"
+              ? `${source.leaderPhoneMasked || "未知手机号"} ｜ 共 ${source.totalGroups || 0} 个拼团`
+              : `${source.leaderName || "未命名团长"} ｜ ${source.leaderPhoneMasked || "未知手机号"} ｜ ${source.isSuccess ? "已成团" : "未成团"}`,
+          rows,
+          query: ""
+        };
+        $("orderDetailSearchInput").value = "";
+        $("orderDetailOverlay").classList.add("active");
+        $("orderDetailOverlay").setAttribute("aria-hidden", "false");
+        renderOrderDetails();
+      }
+
+      function dateValueFromText(value) {
+        if (!value) return 0;
+        const date = new Date(String(value).replace(/^(\d{4})-(\d{1,2})-(\d{1,2})/, "$1/$2/$3"));
+        return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+      }
+
+      function filteredOrderDetails() {
+        const q = state.orderDetail.query.trim().toLowerCase();
+        return state.orderDetail.rows.filter((item) => {
+          const text = `${item.customerName} ${item.customerPhone} ${item.customerPhoneMasked} ${item.title}`.toLowerCase();
+          return !q || text.includes(q);
+        });
+      }
+
+      function exportOrderDetailRows() {
+        return filteredOrderDetails().map(({ groupStatus, orderStatus, ...item }) => item);
+      }
+
+      function renderOrderDetails() {
+        const rows = filteredOrderDetails();
+        const totalAmount = rows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        const customerCount = new Set(rows.map((item) => item.customerPhone || item.customerName || item.orderId).filter(Boolean)).size;
+        $("orderDetailTitle").textContent = state.orderDetail.title || "客户明细";
+        $("orderDetailSubtitle").textContent = state.orderDetail.subtitle || "查看有效订单对应的购买客户";
+        $("orderDetailSummary").innerHTML = [
+          `<span>有效订单 ${rows.length} 单</span>`,
+          `<span>有效金额 ${money(totalAmount)}</span>`,
+          `<span>客户 ${customerCount} 人</span>`
+        ].join("");
+        if (rows.length === 0) {
+          $("orderDetailRows").innerHTML = '<tr><td colspan="7"><div class="empty">没有匹配的客户明细</div></td></tr>';
+          return;
+        }
+        $("orderDetailRows").innerHTML = rows
+          .map((item, index) => `
+            <tr>
+              <td>${index + 1}</td>
+              <td>${escapeHtml(item.customerName || "未命名客户")}</td>
+              <td>${escapeHtml(item.customerPhoneMasked || "未知")}</td>
+              <td>${escapeHtml(item.payTime || "未知")}</td>
+              <td>${money(item.amount)}</td>
+              <td>${escapeHtml(item.title || "未命名拼团商品")}</td>
+              <td>${escapeHtml(item.leaderName || "未命名团长")}</td>
+            </tr>
+          `)
+          .join("");
+      }
+
+      function closeOrderDetails() {
+        $("orderDetailOverlay").classList.remove("active");
+        $("orderDetailOverlay").setAttribute("aria-hidden", "true");
+      }
+
+      function bindingRangeText(board) {
+        const beginDate = board?.filters?.beginDate || state.bindingFilters.beginDate;
+        const endDate = board?.filters?.endDate || state.bindingFilters.endDate;
+        const today = dateKey(new Date());
+        if (beginDate && beginDate === endDate && beginDate === today) return "今天";
+        return board?.rangeLabel || (beginDate && endDate ? (beginDate === endDate ? beginDate : `${beginDate} 至 ${endDate}`) : "区间");
       }
 
       function renderBindingTop(board) {
-        const sortLabels = { today: "今日", yesterday: "昨日", cumulative: "累计" };
+        const sortLabels = { range: "区间", yesterday: "昨日", cumulative: "累计" };
+        const rangeText = bindingRangeText(board);
+        const rangeLabel = rangeText ? `（${rangeText}）` : "";
+        $("bindingRangeHead").textContent = rangeText === "今天" ? "今天" : `区间${rangeLabel}`;
         const rows = [...(board.partners || board.topPartners || [])].sort((a, b) => {
           const aPrimary = bindingStats(a[state.bindingSort] || a).totalBindings;
           const bPrimary = bindingStats(b[state.bindingSort] || b).totalBindings;
           const aCumulative = bindingStats(a.cumulative || a).totalBindings;
           const bCumulative = bindingStats(b.cumulative || b).totalBindings;
-          const aToday = bindingStats(a.today).totalBindings;
-          const bToday = bindingStats(b.today).totalBindings;
-          return bPrimary - aPrimary || bToday - aToday || bCumulative - aCumulative;
+          const aRange = bindingStats(a.range).totalBindings;
+          const bRange = bindingStats(b.range).totalBindings;
+          return bPrimary - aPrimary || bRange - aRange || bCumulative - aCumulative;
         });
         state.bindingPage = renderPager("bindingPager", rows, state.bindingPage, "binding");
         const visibleRows = pageRows(rows, state.bindingPage);
-        $("bindingHint").textContent = `当前共 ${rows.length} 位合伙人，按${sortLabels[state.bindingSort]}绑定总数降序，每页 20 条`;
+        const activeSortLabel = state.bindingSort === "range" ? rangeText : sortLabels[state.bindingSort];
+        $("bindingHint").textContent = `当前共 ${rows.length} 位合伙人，按${activeSortLabel}绑定总数降序，每页 20 条`;
         document.querySelectorAll("[data-binding-sort]").forEach((button) => {
           button.classList.toggle("active", button.dataset.bindingSort === state.bindingSort);
         });
@@ -1390,14 +1824,14 @@
             const rank = (state.bindingPage - 1) * state.pageSize + index + 1;
             const cumulative = item.cumulative || item;
             const yesterday = item.yesterday || {};
-            const today = item.today || {};
+            const range = item.range || {};
             return `
               <tr>
                 <td>${rank}</td>
                 <td>${escapeHtml(item.name || "未命名合伙人")}</td>
                 <td>${bindingStatCell(cumulative)}</td>
                 <td>${bindingStatCell(yesterday)}</td>
-                <td>${bindingStatCell(today)}</td>
+                <td>${bindingStatCell(range)}</td>
               </tr>
             `;
           }
@@ -1422,11 +1856,20 @@
         renderSpuGroups(board);
         renderSuccessList(board);
         renderPendingDetail();
+        renderLeaderRankings(board);
         renderInnerTabs();
       }
 
       function renderBinding(board) {
         state.binding = board;
+        if (board.filters) {
+          state.bindingFilters = {
+            beginDate: board.filters.beginDate || state.bindingFilters.beginDate,
+            endDate: board.filters.endDate || state.bindingFilters.endDate
+          };
+          $("bindingBeginDateInput").value = state.bindingFilters.beginDate;
+          $("bindingEndDateInput").value = state.bindingFilters.endDate;
+        }
         $("bindingNotice").innerHTML = "";
         renderBindingMetrics(board);
         renderBindingTop(board);
@@ -1442,8 +1885,9 @@
         $("pageTitle").textContent =
           state.activePage === "groupbuy" ? "恒奕美源拼团订单看板" : "恒奕美源绑定数据看板";
         const board = state.activePage === "groupbuy" ? state.groupbuy : state.binding;
+        const dateText = state.activePage === "binding" ? bindingRangeText(board) : board?.reportDate;
         $("subtitle").textContent = board
-          ? `日期：${board.reportDate} ｜ 统计截止：${board.generatedAtText}`
+          ? `日期：${dateText} ｜ 统计截止：${board.generatedAtText}`
           : "正在读取本月拼团数据";
       }
 
@@ -1497,6 +1941,14 @@
         return query ? `/api/groupbuy?${query}` : "/api/groupbuy";
       }
 
+      function bindingApiPath() {
+        const params = new URLSearchParams();
+        if (state.bindingFilters.beginDate) params.set("begin_date", state.bindingFilters.beginDate);
+        if (state.bindingFilters.endDate) params.set("end_date", state.bindingFilters.endDate);
+        const query = params.toString();
+        return query ? `/api/binding?${query}` : "/api/binding";
+      }
+
       async function refresh() {
         const button = $("refreshBtn");
         button.disabled = true;
@@ -1510,7 +1962,7 @@
           if (state.activePage === "groupbuy") {
             renderGroupbuy(await fetchJson(groupbuyApiPath()));
           } else {
-            renderBinding(await fetchJson("/api/binding"));
+            renderBinding(await fetchJson(bindingApiPath()));
           }
           renderShell();
         } catch (error) {
@@ -1525,6 +1977,8 @@
             $("successPager").innerHTML = "";
             $("detailRows").innerHTML = text;
             $("detailPager").innerHTML = "";
+            $("rankingRows").innerHTML = `<tr><td colspan="9">${text}</td></tr>`;
+            $("rankingPager").innerHTML = "";
           } else {
             $("bindingNotice").innerHTML = text;
             $("bindingRows").innerHTML = `<tr><td colspan="5">${text}</td></tr>`;
@@ -1547,6 +2001,19 @@
       $("refreshBtn").addEventListener("click", refresh);
       $("exportSuccessBtn").addEventListener("click", () => exportGroupbuyRows("success"));
       $("exportPendingBtn").addEventListener("click", () => exportGroupbuyRows("pending"));
+      $("exportRankingBtn").addEventListener("click", () => exportGroupbuyRows("ranking"));
+      $("exportRankingDetailBtn").addEventListener("click", () => exportGroupbuyRows("rankingDetails"));
+      $("closeOrderDetailBtn").addEventListener("click", closeOrderDetails);
+      $("orderDetailOverlay").addEventListener("click", (event) => {
+        if (event.target === $("orderDetailOverlay")) closeOrderDetails();
+      });
+      $("orderDetailSearchInput").addEventListener("input", (event) => {
+        state.orderDetail.query = event.target.value;
+        renderOrderDetails();
+      });
+      $("exportOrderDetailBtn").addEventListener("click", () => {
+        downloadExcel("恒奕美源拼团", "客户明细", exportOrderDetailRows());
+      });
       $("searchInput").addEventListener("input", (event) => {
         state.groupbuyQuery = event.target.value;
         state.pendingPage = 1;
@@ -1556,16 +2023,37 @@
         if (event.key === "Enter") $("applyGroupbuyFilterBtn").click();
       });
       $("applyGroupbuyFilterBtn").addEventListener("click", () => {
+        const beginDate = $("beginDateInput").value;
+        const endDate = $("endDateInput").value;
+        if (!validateQueryRange(beginDate, endDate)) return;
         state.groupbuyFilters = {
           keyword: $("productSearchInput").value.trim(),
-          beginDate: $("beginDateInput").value,
-          endDate: $("endDateInput").value
+          beginDate,
+          endDate
         };
         state.successPage = 1;
         state.pendingPage = 1;
+        state.rankingPage = 1;
+        refresh();
+      });
+      $("applyBindingFilterBtn").addEventListener("click", () => {
+        const beginDate = $("bindingBeginDateInput").value;
+        const endDate = $("bindingEndDateInput").value;
+        if (!validateQueryRange(beginDate, endDate)) return;
+        state.bindingFilters = {
+          beginDate,
+          endDate
+        };
+        state.bindingSort = "range";
+        state.bindingPage = 1;
         refresh();
       });
       document.addEventListener("click", (event) => {
+        const detailButton = event.target.closest("[data-detail-scope]");
+        if (detailButton) {
+          openOrderDetails(detailButton.dataset.detailScope, detailButton.dataset.detailKey);
+          return;
+        }
         const action = event.target?.dataset?.pageAction;
         if (!action) return;
         const [type, direction] = action.split(":");
@@ -1576,6 +2064,10 @@
         if (type === "success") {
           state.successPage += direction === "next" ? 1 : -1;
           renderSuccessList(state.groupbuy);
+        }
+        if (type === "ranking") {
+          state.rankingPage += direction === "next" ? 1 : -1;
+          renderLeaderRankings(state.groupbuy);
         }
         if (type === "binding") {
           state.bindingPage += direction === "next" ? 1 : -1;
@@ -1598,10 +2090,18 @@
           renderInnerTabs();
         });
       });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && $("orderDetailOverlay").classList.contains("active")) {
+          closeOrderDetails();
+        }
+      });
 
       Object.assign(state.groupbuyFilters, currentMonthRange());
+      Object.assign(state.bindingFilters, todayRange());
       $("beginDateInput").value = state.groupbuyFilters.beginDate;
       $("endDateInput").value = state.groupbuyFilters.endDate;
+      $("bindingBeginDateInput").value = state.bindingFilters.beginDate;
+      $("bindingEndDateInput").value = state.bindingFilters.endDate;
       refresh();
     </script>
   </body>

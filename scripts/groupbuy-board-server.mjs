@@ -19,6 +19,7 @@ const host = env.GROUPBUY_BOARD_HOST || "127.0.0.1";
 const sessionCookieName = "hy_board_session";
 const sessionTtlMs = Number(env.BOARD_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
 const requestTimeoutMs = Number(env.UPSTREAM_TIMEOUT_MS || 25000);
+const maxDateRangeDays = Number(env.MAX_QUERY_RANGE_DAYS || 61);
 const sessions = new Map();
 const bindingMgTokenCache = { token: "", expiresAt: 0 };
 const bindingLiteTokenCache = { token: "", expiresAt: 0 };
@@ -268,13 +269,59 @@ function monthStartKey(date = new Date()) {
 }
 
 function dateRangeFromSearch(searchParams = new URLSearchParams()) {
-  const beginDate = String(searchParams.get("begin_date") || searchParams.get("start") || env.GROUPBUY_BEGIN_DATE || monthStartKey()).trim();
-  const endDate = String(searchParams.get("end_date") || searchParams.get("end") || env.GROUPBUY_END_DATE || todayKey()).trim();
+  const beginDate = formatDateKey(searchParams.get("begin_date") || searchParams.get("start") || env.GROUPBUY_BEGIN_DATE || monthStartKey());
+  const endDate = formatDateKey(searchParams.get("end_date") || searchParams.get("end") || env.GROUPBUY_END_DATE || todayKey());
   const keyword = String(searchParams.get("keyword") || searchParams.get("q") || env.GROUPBUY_DEFAULT_KEYWORD || "").trim();
-  return {
+  return normalizeDateRange({
     beginDate,
     endDate,
     keyword
+  });
+}
+
+function bindingDateRangeFromSearch(searchParams = new URLSearchParams()) {
+  const fallbackDate = todayKey();
+  const beginDate = formatDateKey(
+    searchParams.get("begin_date") || searchParams.get("start") || env.BINDING_BEGIN_DATE || fallbackDate
+  );
+  const endDate = formatDateKey(
+    searchParams.get("end_date") || searchParams.get("end") || env.BINDING_END_DATE || fallbackDate
+  );
+  return normalizeDateRange({
+    beginDate: beginDate || fallbackDate,
+    endDate: endDate || beginDate || fallbackDate
+  });
+}
+
+function dateKeyToUtcMs(value) {
+  const dateKey = formatDateKey(value);
+  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return 0;
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function dateRangeDays(beginDate, endDate) {
+  const beginMs = dateKeyToUtcMs(beginDate);
+  const endMs = dateKeyToUtcMs(endDate);
+  if (!beginMs || !endMs) return 0;
+  return Math.floor((endMs - beginMs) / 86400000) + 1;
+}
+
+function normalizeDateRange(filters = {}) {
+  let beginDate = formatDateKey(filters.beginDate);
+  let endDate = formatDateKey(filters.endDate);
+  if (!beginDate && endDate) beginDate = endDate;
+  if (!endDate && beginDate) endDate = beginDate;
+  if (beginDate && endDate && beginDate > endDate) {
+    [beginDate, endDate] = [endDate, beginDate];
+  }
+  if (beginDate && endDate && dateRangeDays(beginDate, endDate) > maxDateRangeDays) {
+    throw new AppError(`查询时间跨度最多只能 ${maxDateRangeDays} 天，请缩小日期范围。`, 400);
+  }
+  return {
+    ...filters,
+    beginDate,
+    endDate
   };
 }
 
@@ -363,6 +410,48 @@ function statusValue(order) {
       "refund_status",
       "after_sale_status"
     ])) || ""
+  ).trim();
+}
+
+function customerNameFromOrder(order) {
+  const member = order.member || {};
+  const contact = order.contact || {};
+  return String(
+    firstValue(order, fieldList("GROUPBUY_CUSTOMER_NAME_FIELD", [
+      "customer_name",
+      "buyer_name",
+      "member_name",
+      "nickname",
+      "user_name",
+      "name"
+    ])) ||
+      member.name ||
+      member.nickname ||
+      contact.name ||
+      "未命名客户"
+  ).trim();
+}
+
+function customerPhoneFromOrder(order) {
+  const member = order.member || {};
+  const contact = order.contact || {};
+  return String(
+    firstValue(order, fieldList("GROUPBUY_CUSTOMER_PHONE_FIELD", [
+      "customer_phone",
+      "buyer_phone",
+      "member_phone",
+      "mobile",
+      "phone",
+      "handset",
+      "tel"
+    ])) ||
+      member.handset ||
+      member.mobile ||
+      member.phone ||
+      contact.handset ||
+      contact.mobile ||
+      contact.phone ||
+      ""
   ).trim();
 }
 
@@ -491,12 +580,43 @@ function normalizeOrder(order) {
     leaderPhoneMasked: maskPhone(leaderPhone),
     title: String(title).trim(),
     createdAt: String(createdAt).trim(),
+    latestOrderAt: String(createdAt).trim(),
     targetCount,
     joinedCount,
     remaining,
     isSuccess,
     amount: amountFromOrder(order),
+    orderDetails: [],
     rawStatus: statusValue(order)
+  };
+}
+
+function flatOrderDetail(order, normalized) {
+  const isOpenGroupOrder = Boolean(order.is_groupbuy_leader || order.is_leader || order.is_group_leader);
+  const customerPhone = isOpenGroupOrder ? normalized.leaderPhone : customerPhoneFromOrder(order);
+  return {
+    orderId: String(
+      firstValue(order, fieldList("GROUPBUY_ORDER_ID_FIELD", [
+        "order_id",
+        "id",
+        "trade_no",
+        "order_sn",
+        "out_trade_no"
+      ])) || `${normalized.groupId}-${normalized.paidOrders || 1}-${normalized.createdAt}`
+    ),
+    groupId: normalized.groupId,
+    leaderName: normalized.leaderName,
+    leaderPhone: normalized.leaderPhone,
+    leaderPhoneMasked: normalized.leaderPhoneMasked,
+    title: normalized.title,
+    groupStatus: normalized.isSuccess ? "已成团" : "未成团",
+    customerName: isOpenGroupOrder ? normalized.leaderName : customerNameFromOrder(order),
+    customerPhone,
+    customerPhoneMasked: maskPhone(customerPhone),
+    payTime: formatDateTime(normalized.latestOrderAt || normalized.createdAt),
+    amount: normalized.amount,
+    orderStatus: normalized.rawStatus || "有效",
+    isOpenGroupOrder
   };
 }
 
@@ -504,6 +624,7 @@ function groupOrders(rows) {
   const groups = new Map();
   for (const row of rows) {
     const order = normalizeOrder(row);
+    const detail = flatOrderDetail(row, order);
     const current =
       groups.get(order.groupId) || {
         groupId: order.groupId,
@@ -512,12 +633,14 @@ function groupOrders(rows) {
         leaderPhoneMasked: order.leaderPhoneMasked,
         title: order.title,
         createdAt: order.createdAt,
+        latestOrderAt: order.latestOrderAt,
         targetCount: order.targetCount,
         joinedCount: 0,
         paidOrders: 0,
         amount: 0,
         remaining: order.remaining,
         isSuccess: false,
+        orderDetails: [],
         rawStatus: order.rawStatus
       };
     current.joinedCount = Math.max(current.joinedCount, order.joinedCount);
@@ -526,6 +649,11 @@ function groupOrders(rows) {
     current.isSuccess = current.isSuccess || order.isSuccess;
     current.paidOrders += 1;
     current.amount += order.amount;
+    current.orderDetails.push(detail);
+    if (dateTimeMs(order.latestOrderAt || order.createdAt) >= dateTimeMs(current.latestOrderAt || current.createdAt)) {
+      current.latestOrderAt = order.latestOrderAt || order.createdAt;
+      current.leaderName = order.leaderName || current.leaderName;
+    }
     groups.set(order.groupId, current);
   }
 
@@ -535,6 +663,12 @@ function groupOrders(rows) {
     return {
       ...group,
       joinedCount: Math.max(group.joinedCount, group.paidOrders),
+      orderDetails: group.orderDetails
+        .map((detail) => ({
+          ...detail,
+          groupStatus: group.isSuccess ? "已成团" : "未成团"
+        }))
+        .sort((a, b) => dateTimeMs(b.payTime) - dateTimeMs(a.payTime)),
       remaining: group.isSuccess ? 0 : Math.max(group.remaining || computedRemaining, 0)
     };
   });
@@ -570,6 +704,62 @@ function buildSpuGroups(groups) {
       successRate: item.totalGroups > 0 ? item.successGroups / item.totalGroups : 0
     }))
     .sort((a, b) => b.totalOrders - a.totalOrders || b.totalAmount - a.totalAmount);
+}
+
+function dateTimeMs(value) {
+  if (!value) return 0;
+  if (typeof value === "number" || /^\d{10,13}$/.test(String(value))) {
+    const number = Number(value);
+    const date = new Date(String(value).length === 13 ? number : number * 1000);
+    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+  }
+  const text = String(value).trim();
+  const normalized = text.replace(/^(\d{4})-(\d{1,2})-(\d{1,2})/, "$1/$2/$3");
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function buildLeaderRankings(groups) {
+  const rankingMap = new Map();
+  for (const group of groups) {
+    const phone = String(group.leaderPhone || "").trim();
+    const key = phone || `name:${String(group.leaderName || "未命名团长").trim()}`;
+    const current =
+      rankingMap.get(key) || {
+        leaderName: group.leaderName || "未命名团长",
+        leaderPhone: phone,
+        leaderPhoneMasked: group.leaderPhoneMasked || maskPhone(phone),
+        paidOrders: 0,
+        amount: 0,
+        totalGroups: 0,
+        successGroups: 0,
+        pendingGroups: 0,
+        latestOrderAt: "",
+        latestOrderAtMs: 0,
+        orderDetails: []
+      };
+    const candidateTime = dateTimeMs(group.latestOrderAt || group.createdAt);
+    current.paidOrders += group.paidOrders;
+    current.amount += group.amount;
+    current.totalGroups += 1;
+    current.successGroups += group.isSuccess ? 1 : 0;
+    current.pendingGroups += group.isSuccess ? 0 : 1;
+    current.orderDetails.push(...(group.orderDetails || []));
+    if (candidateTime >= current.latestOrderAtMs) {
+      current.leaderName = group.leaderName || current.leaderName;
+      current.latestOrderAt = group.latestOrderAt || group.createdAt || current.latestOrderAt;
+      current.latestOrderAtMs = candidateTime;
+    }
+    rankingMap.set(key, current);
+  }
+
+  return [...rankingMap.values()]
+    .map(({ latestOrderAtMs, ...item }) => ({
+      ...item,
+      orderDetails: item.orderDetails.sort((a, b) => dateTimeMs(b.payTime) - dateTimeMs(a.payTime)),
+      successRate: item.totalGroups > 0 ? item.successGroups / item.totalGroups : 0
+    }))
+    .sort((a, b) => b.paidOrders - a.paidOrders || b.amount - a.amount || b.totalGroups - a.totalGroups);
 }
 
 function boardBase(filters) {
@@ -642,6 +832,7 @@ function buildBoard(payload, filters = dateRangeFromSearch()) {
       successLeaderNames: succeeded.map((group) => group.leaderName)
     },
     spuGroups: buildSpuGroups(groups),
+    leaderRankings: buildLeaderRankings(groups),
     pendingTop10: pending.slice(0, Number(env.GROUPBUY_PENDING_PUSH_LIMIT || 10)),
     pending,
     succeeded,
@@ -687,6 +878,27 @@ function nestedOrderAmount(order) {
   return (env.GROUPBUY_AMOUNT_UNIT || "cent") === "yuan" ? amount : amount / 100;
 }
 
+function nestedOrderDetail(order, group) {
+  const isOpenGroupOrder = Boolean(order.is_groupbuy_leader || order.is_leader || order.is_group_leader);
+  const customerPhone = isOpenGroupOrder ? group.leaderPhone : customerPhoneFromOrder(order);
+  return {
+    orderId: String(order.order_id || order.id || order.trade_no || order.order_sn || `${group.groupId}-${nestedOrderDate(order)}`),
+    groupId: group.groupId,
+    leaderName: group.leaderName,
+    leaderPhone: group.leaderPhone,
+    leaderPhoneMasked: group.leaderPhoneMasked,
+    title: group.title,
+    groupStatus: group.isSuccess ? "已成团" : "未成团",
+    customerName: isOpenGroupOrder ? group.leaderName : customerNameFromOrder(order),
+    customerPhone,
+    customerPhoneMasked: maskPhone(customerPhone),
+    payTime: formatDateTime(nestedOrderDate(order)),
+    amount: nestedOrderAmount(order),
+    orderStatus: String(order.status_text || order.order_status_text || order.status || "有效"),
+    isOpenGroupOrder
+  };
+}
+
 function nestedLeaderInfo(orders) {
   const leader = orders.find((order) => Boolean(order.is_groupbuy_leader)) || orders[0] || {};
   const member = leader.member || {};
@@ -729,14 +941,19 @@ function buildNestedGroupbuyBoard(allRows, filters) {
       .map((order) => nestedOrderDate(order))
       .filter(Boolean)
       .sort((a, b) => Number(a) - Number(b))[0];
+    const latestOrderAt = effectiveOrders
+      .map((order) => nestedOrderDate(order))
+      .filter(Boolean)
+      .sort((a, b) => dateTimeMs(b) - dateTimeMs(a))[0];
 
-    groups.push({
+    const group = {
       groupId: String(record.id || row.id || `${leader.name}-${leader.phone}-${title}`),
       leaderName: String(leader.name || "未命名团长").trim(),
       leaderPhone: leader.phone,
       leaderPhoneMasked: maskPhone(leader.phone),
       title,
       createdAt: formatDateTime(createdAt),
+      latestOrderAt: formatDateTime(latestOrderAt),
       targetCount,
       joinedCount,
       paidOrders: effectiveOrders.length,
@@ -744,7 +961,11 @@ function buildNestedGroupbuyBoard(allRows, filters) {
       remaining,
       isSuccess,
       rawStatus: String(record.status ?? "")
-    });
+    };
+    group.orderDetails = effectiveOrders
+      .map((order) => nestedOrderDetail(order, group))
+      .sort((a, b) => dateTimeMs(b.payTime) - dateTimeMs(a.payTime));
+    groups.push(group);
   }
 
   const succeeded = groups
@@ -776,6 +997,7 @@ function buildNestedGroupbuyBoard(allRows, filters) {
       successLeaderNames: succeeded.map((group) => group.leaderName)
     },
     spuGroups: buildSpuGroups(groups),
+    leaderRankings: buildLeaderRankings(groups),
     pendingTop10: pending.slice(0, Number(env.GROUPBUY_PENDING_PUSH_LIMIT || 10)),
     pending,
     succeeded,
@@ -1350,7 +1572,7 @@ function bindingDateValue(row, preferredField) {
   return "";
 }
 
-function buildBindingBoard(payload) {
+function buildBindingBoard(payload, filters = bindingDateRangeFromSearch()) {
   const rawRows = bindingRows(payload);
   const rows = rawRows.filter(isValidBindingRow);
   const phoneFields = String(env.BINDING_PHONE_FIELD || "phone,mobile,handset,tel")
@@ -1359,10 +1581,15 @@ function buildBindingBoard(payload) {
     .filter(Boolean);
   const reportDate = env.REPORT_DATE || todayKey();
   const yesterdayDate = env.REPORT_YESTERDAY_DATE || offsetDateKey(-1);
+  const rangeLabel =
+    filters.beginDate === filters.endDate
+      ? (filters.beginDate === reportDate ? "今天" : filters.beginDate)
+      : `${filters.beginDate} 至 ${filters.endDate}`;
   const dateField = env.BINDING_DATE_FIELD || "created_at";
   const dateKeyForRow = (row) => formatDateKey(bindingDateValue(row, dateField));
   const todayRows = rows.filter((row) => dateKeyForRow(row) === reportDate);
   const yesterdayRows = rows.filter((row) => dateKeyForRow(row) === yesterdayDate);
+  const rangeRows = rows.filter((row) => isDateInRange(bindingDateValue(row, dateField), filters.beginDate, filters.endDate));
   const partnerNameField = env.PARTNER_NAME_FIELD || "retail_store_name";
   const partnerIdField = env.PARTNER_ID_FIELD || "retail_store_id";
   const partnerMap = new Map();
@@ -1379,12 +1606,16 @@ function buildBindingBoard(payload) {
     .map((partner) => {
       const partnerTodayRows = partner.rows.filter((row) => dateKeyForRow(row) === reportDate);
       const partnerYesterdayRows = partner.rows.filter((row) => dateKeyForRow(row) === yesterdayDate);
+      const partnerRangeRows = partner.rows.filter((row) =>
+        isDateInRange(bindingDateValue(row, dateField), filters.beginDate, filters.endDate)
+      );
       return {
         id: partner.id,
         name: partner.name,
         cumulative: countBindingRows(partner.rows, phoneFields),
         today: countBindingRows(partnerTodayRows, phoneFields),
-        yesterday: countBindingRows(partnerYesterdayRows, phoneFields)
+        yesterday: countBindingRows(partnerYesterdayRows, phoneFields),
+        range: countBindingRows(partnerRangeRows, phoneFields)
       };
     })
     .sort((a, b) =>
@@ -1398,9 +1629,15 @@ function buildBindingBoard(payload) {
     generatedAtText: new Date().toLocaleString("zh-CN", { hour12: false }),
     reportDate,
     yesterdayDate,
+    rangeLabel,
+    filters: {
+      beginDate: filters.beginDate,
+      endDate: filters.endDate
+    },
     cumulative: countBindingRows(rows, phoneFields),
     today: countBindingRows(todayRows, phoneFields),
     yesterday: countBindingRows(yesterdayRows, phoneFields),
+    range: countBindingRows(rangeRows, phoneFields),
     partners,
     topPartners: partners.slice(0, Number(env.TOP_PARTNER_LIMIT || 20)).map((partner) => ({
       id: partner.id,
@@ -1476,11 +1713,13 @@ function bindingAuthHeaders(token) {
   return headers;
 }
 
-function withBindingPage(urlText, page, pageSize, session = {}, bindingToken = "") {
+function withBindingPage(urlText, page, pageSize, session = {}, bindingToken = "", filters = {}) {
   const url = new URL(urlText);
   const { token, sessionToken, salonId, brandId, zoneId } = bindingAuthContext(session);
   url.searchParams.set(env.BINDING_PAGE_PARAM || "page", String(page));
   url.searchParams.set(env.BINDING_PAGE_SIZE_PARAM || "page_size", String(pageSize));
+  if (filters.beginDate) url.searchParams.set(env.BINDING_BEGIN_DATE_PARAM || "begin_date", filters.beginDate);
+  if (filters.endDate) url.searchParams.set(env.BINDING_END_DATE_PARAM || "end_date", filters.endDate);
   if (!url.searchParams.get("search_type")) url.searchParams.set("search_type", env.BINDING_SEARCH_TYPE || "1");
   if (!url.searchParams.has("keyword")) url.searchParams.set("keyword", env.BINDING_KEYWORD || "");
   if ((env.BINDING_DATA_LOGIN || "none") === "mg") {
@@ -1557,7 +1796,7 @@ async function fetchBindingJsonWithAuth(url, headers, retryAuth = true) {
   }
 }
 
-async function fetchBindingPayload(session = {}) {
+async function fetchBindingPayload(session = {}, filters = bindingDateRangeFromSearch()) {
   const defaultDataFile = "./data/binding-sample.json";
   if (env.BINDING_DATA_FILE || !env.BINDING_DATA_URL) {
     return JSON.parse(await readFile(path.resolve(projectRoot, env.BINDING_DATA_FILE || defaultDataFile), "utf8"));
@@ -1568,9 +1807,9 @@ async function fetchBindingPayload(session = {}) {
     loginMode === "mg" ? await loginByMgCli() : loginMode === "lite" ? await loginByBindingLiteBackend() : "";
   const headers = loginMode === "mg" ? bindingAuthHeaders(bindingToken) : bindingAuthHeaders();
 
-  if ((env.BINDING_PAGINATE || "false") !== "true") {
+  if ((env.BINDING_PAGINATE || "true") !== "true") {
     return fetchBindingJsonWithAuth(
-      withBindingPage(env.BINDING_DATA_URL, 1, Number(env.BINDING_PAGE_SIZE || 100), session, bindingToken),
+      withBindingPage(env.BINDING_DATA_URL, 1, Number(env.BINDING_PAGE_SIZE || 100), session, bindingToken, filters),
       headers
     );
   }
@@ -1582,7 +1821,7 @@ async function fetchBindingPayload(session = {}) {
 
   for (let page = 1; page <= maxPage; page += 1) {
     const payload = await fetchBindingJsonWithAuth(
-      withBindingPage(env.BINDING_DATA_URL, page, pageSize, session, bindingToken),
+      withBindingPage(env.BINDING_DATA_URL, page, pageSize, session, bindingToken, filters),
       headers
     );
     const pageRows = bindingPayloadRows(payload);
@@ -1929,8 +2168,9 @@ async function handleRequest(req, res) {
 
     if (url.pathname === "/api/binding") {
       try {
-        const payload = await fetchBindingPayload(session);
-        const board = buildBindingBoard(payload);
+        const filters = bindingDateRangeFromSearch(url.searchParams);
+        const payload = await fetchBindingPayload(session, filters);
+        const board = buildBindingBoard(payload, filters);
         await jsonResponse(res, 200, board);
       } catch (error) {
         throw error;
