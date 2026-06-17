@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -20,6 +20,8 @@ const sessionCookieName = "hy_board_session";
 const sessionTtlMs = Number(env.BOARD_SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
 const requestTimeoutMs = Number(env.UPSTREAM_TIMEOUT_MS || 25000);
 const maxDateRangeDays = Number(env.MAX_QUERY_RANGE_DAYS || 61);
+const loginAuditLogPath = path.join(projectRoot, "logs", "login-audit.jsonl");
+const loginAuditLimit = Number(env.LOGIN_AUDIT_LOG_LIMIT || 300);
 const sessions = new Map();
 const bindingMgTokenCache = { token: "", expiresAt: 0 };
 const bindingLiteTokenCache = { token: "", expiresAt: 0 };
@@ -1027,6 +1029,13 @@ function formatDateTime(value) {
   return String(value);
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => {
+    const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+    return map[char] || char;
+  });
+}
+
 function groupbuyApiDateTime(dateKey, endOfDay = false) {
   const normalized = formatDateKey(dateKey);
   if (!normalized) return "";
@@ -1881,6 +1890,125 @@ function clearSessionCookie(res) {
   );
 }
 
+function normalizeIp(value) {
+  let ip = String(value || "").trim();
+  if (!ip) return "";
+  if (ip.includes(",")) ip = ip.split(",")[0].trim();
+  if (ip.startsWith("::ffff:")) ip = ip.slice(7);
+  if (ip === "::1") return "127.0.0.1";
+  return ip;
+}
+
+function clientIp(req) {
+  return (
+    normalizeIp(req.headers["x-forwarded-for"]) ||
+    normalizeIp(req.headers["x-real-ip"]) ||
+    normalizeIp(req.socket?.remoteAddress) ||
+    "未知"
+  );
+}
+
+function isLocalOrPrivateIp(ip) {
+  if (!ip || ip === "未知") return false;
+  if (ip === "127.0.0.1" || ip === "localhost") return true;
+  if (ip.startsWith("10.")) return true;
+  if (ip.startsWith("192.168.")) return true;
+  const match = ip.match(/^172\.(\d+)\./);
+  if (match) {
+    const second = Number(match[1]);
+    return second >= 16 && second <= 31;
+  }
+  if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80:")) return true;
+  return false;
+}
+
+function uniqueParts(parts) {
+  return [...new Set(parts.map((part) => String(part || "").trim()).filter(Boolean))];
+}
+
+function locationFromPayload(payload) {
+  const parts = uniqueParts([
+    payload?.country,
+    payload?.country_name,
+    payload?.province,
+    payload?.region,
+    payload?.regionName,
+    payload?.city,
+    payload?.district
+  ]);
+  return parts.length ? parts.join(" ") : "";
+}
+
+async function resolveIpLocation(ip) {
+  if (!ip || ip === "未知") return "未知位置";
+  if (isLocalOrPrivateIp(ip)) return "本地或内网";
+  if ((env.LOGIN_IP_LOCATION_LOOKUP || "true") === "false") return "未启用定位";
+
+  const template = env.LOGIN_IP_LOCATION_API || "https://ipwho.is/{ip}?lang=zh-CN";
+  const url = template.includes("{ip}")
+    ? template.replaceAll("{ip}", encodeURIComponent(ip))
+    : `${template}${encodeURIComponent(ip)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(env.LOGIN_IP_LOCATION_TIMEOUT_MS || 1500));
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return "未知位置";
+    const payload = await response.json();
+    return locationFromPayload(payload) || "未知位置";
+  } catch {
+    return "未知位置";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function compactUserAgent(value) {
+  const text = String(value || "").trim();
+  if (!text) return "未知设备";
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+
+async function recordSuccessfulLogin(req, user) {
+  const ip = clientIp(req);
+  const record = {
+    time: new Date().toISOString(),
+    account: user.account || "",
+    ip,
+    location: await resolveIpLocation(ip),
+    userAgent: compactUserAgent(req.headers["user-agent"]),
+    success: true
+  };
+  try {
+    await mkdir(path.dirname(loginAuditLogPath), { recursive: true });
+    await appendFile(loginAuditLogPath, `${JSON.stringify(record)}\n`, "utf8");
+  } catch (error) {
+    console.warn(`[${new Date().toISOString()}] 登录审计日志写入失败:`, error.message || error);
+  }
+}
+
+async function readLoginAuditLogs(limit = loginAuditLimit) {
+  let text = "";
+  try {
+    text = await readFile(loginAuditLogPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-Math.max(1, Math.min(Number(limit) || loginAuditLimit, 1000)))
+    .reverse()
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
 function redirectResponse(res, location) {
   res.writeHead(302, { location });
   res.end();
@@ -2075,6 +2203,263 @@ function loginPage() {
 </html>`;
 }
 
+function logsPage(session) {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>登录日志｜恒奕美源数据后台</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #161a22;
+        --muted: #6b7280;
+        --line: #e1e6ee;
+        --line-strong: #cfd7e4;
+        --soft: #f3f6f8;
+        --brand: #0f766e;
+        --brand-strong: #0b5f59;
+        --white: #fff;
+        --shadow-soft: 0 8px 24px rgba(22, 26, 34, 0.06);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+          sans-serif;
+        color: var(--ink);
+        background:
+          linear-gradient(180deg, #fbfcfa 0, #f3f6f8 240px),
+          var(--soft);
+      }
+
+      .wrap {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 26px 0 42px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .sub {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      a,
+      button {
+        display: inline-grid;
+        place-items: center;
+        height: 38px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        text-decoration: none;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button {
+        border-color: var(--brand);
+        background: linear-gradient(180deg, #128278, var(--brand-strong));
+        color: var(--white);
+        box-shadow: 0 8px 18px rgba(15, 118, 110, 0.18);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      a:hover {
+        border-color: var(--line-strong);
+        color: var(--ink);
+      }
+
+      .panel {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .table-scroll {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        min-width: 900px;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      th,
+      td {
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+        font-size: 13px;
+      }
+
+      th {
+        background: #f8faf9;
+        color: var(--muted);
+        font-weight: 800;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .empty,
+      .error {
+        padding: 34px 18px;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .error {
+        color: #b42318;
+      }
+
+      .ua {
+        word-break: break-word;
+      }
+
+      @media (max-width: 720px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>登录日志</h1>
+          <div class="sub">当前账号：${escapeHtml(session?.account || "未知")}，仅记录成功登录</div>
+        </div>
+        <div class="actions">
+          <button id="refreshBtn" type="button">刷新日志</button>
+          <a href="/groupbuy">返回看板</a>
+          <a href="/logout">退出登录</a>
+        </div>
+      </header>
+
+      <section class="panel">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 190px;">登录时间</th>
+                <th style="width: 150px;">账号</th>
+                <th style="width: 160px;">IP</th>
+                <th style="width: 190px;">位置</th>
+                <th>浏览器/设备</th>
+              </tr>
+            </thead>
+            <tbody id="logRows">
+              <tr><td colspan="5" class="empty">正在读取登录日志</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const rows = document.getElementById("logRows");
+      const refreshBtn = document.getElementById("refreshBtn");
+      const escapeHtml = (value) =>
+        String(value ?? "").replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        })[char] || char);
+      const formatTime = (value) => {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value || "未知";
+        return date.toLocaleString("zh-CN", { hour12: false });
+      };
+
+      async function loadLogs() {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = "刷新中";
+        try {
+          const response = await fetch("/api/login-logs", { cache: "no-store" });
+          if (response.status === 401) {
+            location.href = "/login";
+            return;
+          }
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "读取日志失败");
+          if (!data.logs.length) {
+            rows.innerHTML = '<tr><td colspan="5" class="empty">暂无成功登录日志</td></tr>';
+            return;
+          }
+          rows.innerHTML = data.logs
+            .map((item) => \`
+              <tr>
+                <td>\${escapeHtml(formatTime(item.time))}</td>
+                <td>\${escapeHtml(item.account || "未知")}</td>
+                <td>\${escapeHtml(item.ip || "未知")}</td>
+                <td>\${escapeHtml(item.location || "未知位置")}</td>
+                <td class="ua">\${escapeHtml(item.userAgent || "未知设备")}</td>
+              </tr>
+            \`)
+            .join("");
+        } catch (error) {
+          rows.innerHTML = \`<tr><td colspan="5" class="error">\${escapeHtml(error.message || "读取日志失败")}</td></tr>\`;
+        } finally {
+          refreshBtn.disabled = false;
+          refreshBtn.textContent = "刷新日志";
+        }
+      }
+
+      refreshBtn.addEventListener("click", loadLogs);
+      loadLogs();
+    </script>
+  </body>
+</html>`;
+}
+
 async function handleRequest(req, res) {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
@@ -2114,6 +2499,7 @@ async function handleRequest(req, res) {
         createdAt: Date.now(),
         expiresAt: Date.now() + sessionTtlMs
       });
+      await recordSuccessfulLogin(req, user);
       setSessionCookie(res, id);
       await jsonResponse(res, 200, { ok: true });
       return;
@@ -2140,6 +2526,17 @@ async function handleRequest(req, res) {
     if (url.pathname === "/" || url.pathname === "/groupbuy") {
       const html = await readFile(path.join(projectRoot, "web", "groupbuy-board.html"), "utf8");
       await textResponse(res, 200, html, "text/html; charset=utf-8");
+      return;
+    }
+
+    if (url.pathname === "/logs") {
+      await textResponse(res, 200, logsPage(session), "text/html; charset=utf-8");
+      return;
+    }
+
+    if (url.pathname === "/api/login-logs") {
+      const limit = Number(url.searchParams.get("limit") || loginAuditLimit);
+      await jsonResponse(res, 200, { logs: await readLoginAuditLogs(limit) });
       return;
     }
 
